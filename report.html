@@ -226,15 +226,30 @@
       flex-direction: column;
     }
     .modal-head {
-      padding: 16px 20px;
+      padding: 14px 16px;
       border-bottom: 1px solid #eee;
       display: flex;
       align-items: center;
       justify-content: space-between;
+      gap: 8px;
       flex-shrink: 0;
     }
-    .modal-head h2 { font-size: 16px; font-weight: bold; }
+    .modal-head h2 { font-size: 15px; font-weight: bold; flex: 1; }
+    .btn-share {
+      padding: 8px 14px;
+      background: #2ecc71;
+      color: white;
+      border: none;
+      border-radius: 8px;
+      font-size: 13px;
+      font-weight: bold;
+      cursor: pointer;
+      font-family: inherit;
+      white-space: nowrap;
+    }
+    .btn-share:active { background: #27ae60; }
     .btn-close {
+      flex-shrink: 0;
       background: #f0f0f0;
       border: none;
       border-radius: 50%;
@@ -321,6 +336,7 @@
     <div class="modal-box">
       <div class="modal-head">
         <h2>報告書 プレビュー</h2>
+        <button class="btn-share" onclick="shareURL()">📤 URLをシェア</button>
         <button class="btn-close" onclick="closeModal()">✕</button>
       </div>
       <div class="modal-body" id="summary-body"></div>
@@ -532,6 +548,39 @@
 
     function closeModal() {
       document.getElementById('modal').style.display = 'none';
+    }
+
+    // ─── Share URL ────────────────────────────────────────
+    function shareURL() {
+      saveCurrentData();
+      const payload = {
+        gh: ghNum,
+        ghName: ghName,
+        date: dateEl.value,
+        reporter: reporterEl.value,
+        residents: {},
+        sharedAt: new Date().toISOString()
+      };
+      document.querySelectorAll('.resident-entry').forEach(entry => {
+        payload.residents[entry.dataset.name] = entry.querySelector('textarea').value;
+      });
+
+      const json = JSON.stringify(payload);
+      const encoded = btoa(unescape(encodeURIComponent(json)));
+      const base = location.href.replace('report.html', 'summary.html').split('?')[0].split('#')[0];
+      const url = `${base}#${encoded}`;
+
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(url).then(() => {
+          alert('URLをコピーしました！\nLINEなどに貼り付けて管理者に送ってください。');
+        }).catch(() => showURLPrompt(url));
+      } else {
+        showURLPrompt(url);
+      }
+    }
+
+    function showURLPrompt(url) {
+      prompt('以下のURLをコピーして送信してください：', url);
     }
 
     // ─── Word Export ──────────────────────────────────────
