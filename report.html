@@ -1,0 +1,571 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>業務日報 入力</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
+  <script src="https://unpkg.com/html-docx-js@0.3.1/dist/html-docx.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Hiragino Kaku Gothic ProN', 'Meiryo', 'Yu Gothic', sans-serif;
+      background: #eef2f7;
+      min-height: 100vh;
+      padding-bottom: 120px;
+    }
+
+    /* HEADER */
+    .page-header {
+      background: #4a90d9;
+      color: white;
+      padding: 14px 20px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+    }
+    .page-header a { color: white; text-decoration: none; font-size: 26px; line-height: 1; }
+    .page-header .h-info h1 { font-size: 17px; font-weight: bold; }
+    .page-header .h-info .sub { font-size: 12px; opacity: 0.85; margin-top: 2px; }
+
+    /* SECTIONS */
+    .section {
+      background: white;
+      margin: 14px 16px;
+      border-radius: 12px;
+      padding: 18px;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.06);
+    }
+    .section-label {
+      font-size: 13px;
+      font-weight: bold;
+      color: #4a90d9;
+      margin-bottom: 12px;
+      letter-spacing: 0.5px;
+      padding-bottom: 8px;
+      border-bottom: 2px solid #eef2f7;
+    }
+
+    /* REPORTER */
+    .reporter-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .reporter-row label {
+      font-size: 14px;
+      color: #5a6a7a;
+      white-space: nowrap;
+      font-weight: bold;
+    }
+    .reporter-input {
+      flex: 1;
+      padding: 11px 14px;
+      border: 1.5px solid #d0d8e8;
+      border-radius: 10px;
+      font-size: 15px;
+      font-family: inherit;
+      color: #1a2a3a;
+    }
+    .reporter-input:focus {
+      outline: none;
+      border-color: #4a90d9;
+      box-shadow: 0 0 0 3px rgba(74,144,217,0.15);
+    }
+
+    /* RESIDENT ENTRIES */
+    .resident-entry {
+      margin-bottom: 20px;
+      padding-bottom: 20px;
+      border-bottom: 1px solid #f0f2f5;
+    }
+    .resident-entry:last-child { border-bottom: none; margin-bottom: 0; padding-bottom: 0; }
+
+    .resident-name-label {
+      font-size: 15px;
+      font-weight: bold;
+      color: #1a2a3a;
+      margin-bottom: 8px;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .resident-name-label::before {
+      content: '・';
+      color: #4a90d9;
+      font-size: 20px;
+      line-height: 1;
+    }
+
+    textarea {
+      width: 100%;
+      padding: 12px 14px;
+      border: 1.5px solid #d0d8e8;
+      border-radius: 10px;
+      font-size: 14px;
+      font-family: inherit;
+      color: #1a2a3a;
+      line-height: 1.8;
+      resize: none;
+      overflow: hidden;
+      min-height: 100px;
+    }
+    textarea:focus {
+      outline: none;
+      border-color: #4a90d9;
+      box-shadow: 0 0 0 3px rgba(74,144,217,0.15);
+    }
+    textarea::placeholder { color: #aab; }
+
+    /* NO RESIDENTS */
+    .no-residents {
+      text-align: center;
+      padding: 20px 0;
+    }
+    .no-residents p { color: #999; margin-bottom: 14px; }
+    .btn-go-settings {
+      display: inline-block;
+      padding: 11px 22px;
+      background: #4a90d9;
+      color: white;
+      border-radius: 10px;
+      text-decoration: none;
+      font-size: 15px;
+      font-weight: bold;
+    }
+
+    /* BOTTOM BAR */
+    .bottom-bar {
+      position: fixed;
+      bottom: 0; left: 0; right: 0;
+      background: white;
+      padding: 12px 16px 28px;
+      box-shadow: 0 -2px 8px rgba(0,0,0,0.1);
+      display: flex;
+      gap: 12px;
+    }
+    .btn-summary {
+      flex: 1;
+      padding: 14px;
+      background: white;
+      border: 2px solid #4a90d9;
+      border-radius: 12px;
+      color: #4a90d9;
+      font-size: 15px;
+      font-weight: bold;
+      cursor: pointer;
+      font-family: inherit;
+    }
+    .btn-word {
+      flex: 1;
+      padding: 14px;
+      background: #4a90d9;
+      color: white;
+      border: none;
+      border-radius: 12px;
+      font-size: 15px;
+      font-weight: bold;
+      cursor: pointer;
+      font-family: inherit;
+    }
+    .btn-word:active { background: #3a7bc8; }
+    .btn-summary:active { background: #f0f6ff; }
+
+    /* MODAL */
+    .modal-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.5);
+      z-index: 200;
+      display: flex;
+      align-items: flex-end;
+    }
+    .modal-box {
+      background: white;
+      border-radius: 20px 20px 0 0;
+      width: 100%;
+      max-height: 88vh;
+      display: flex;
+      flex-direction: column;
+    }
+    .modal-head {
+      padding: 16px 20px;
+      border-bottom: 1px solid #eee;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-shrink: 0;
+    }
+    .modal-head h2 { font-size: 16px; font-weight: bold; }
+    .btn-close {
+      background: #f0f0f0;
+      border: none;
+      border-radius: 50%;
+      width: 32px; height: 32px;
+      font-size: 16px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .modal-body {
+      flex: 1;
+      overflow-y: auto;
+      padding: 20px;
+      -webkit-overflow-scrolling: touch;
+    }
+
+    /* SUMMARY STYLES */
+    .s-header-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+      margin-bottom: 18px;
+    }
+    .s-header-table td {
+      border: 1.5px solid #333;
+      padding: 8px 10px;
+      vertical-align: middle;
+    }
+    .s-gh-name {
+      text-align: center;
+      font-size: 20px;
+      font-weight: bold;
+    }
+    .s-sig-head {
+      text-align: center;
+      font-size: 11px;
+      color: #555;
+      background: #f8f8f8;
+    }
+    .s-sig-box { height: 44px; }
+
+    .s-section-title {
+      font-weight: bold;
+      font-size: 14px;
+      margin: 18px 0 10px;
+      padding: 6px 12px;
+      background: #f0f6ff;
+      border-left: 4px solid #4a90d9;
+      border-radius: 0 6px 6px 0;
+    }
+    .s-resident {
+      margin-bottom: 14px;
+    }
+    .s-resident .r-name {
+      font-weight: bold;
+      font-size: 14px;
+      color: #1a2a3a;
+      margin-bottom: 4px;
+    }
+    .s-resident .r-name::before { content: '・'; color: #4a90d9; }
+    .s-resident .r-text {
+      font-size: 13px;
+      line-height: 1.8;
+      color: #333;
+      background: #f9f9f9;
+      padding: 10px 14px;
+      border-radius: 8px;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+    .s-health {
+      font-size: 13px;
+      line-height: 1.8;
+      white-space: pre-wrap;
+      background: #f9f9f9;
+      padding: 10px 14px;
+      border-radius: 8px;
+      word-break: break-all;
+    }
+
+    .draft-indicator {
+      font-size: 11px;
+      color: #4a90d9;
+      text-align: right;
+      padding: 4px 16px 0;
+      opacity: 0.7;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="page-header">
+    <a href="index.html">←</a>
+    <div class="h-info">
+      <h1 id="gh-title">グループホーム ○</h1>
+      <div class="sub" id="date-display"></div>
+    </div>
+  </div>
+
+  <!-- 報告者 -->
+  <div class="section">
+    <div class="reporter-row">
+      <label for="reporter">報告者</label>
+      <input type="text" id="reporter" class="reporter-input" placeholder="氏名を入力">
+    </div>
+  </div>
+
+  <!-- 特記事項 -->
+  <div class="section">
+    <div class="section-label">【特記事項】</div>
+    <div id="residents-container"></div>
+  </div>
+
+  <!-- 健康状況 -->
+  <div class="section">
+    <div class="section-label">【健康状況】</div>
+    <textarea id="health-status" placeholder="夜〜朝の健康状況、バイタル等を記入..." style="min-height:80px"></textarea>
+  </div>
+
+  <div class="draft-indicator" id="draft-indicator"></div>
+
+  <!-- Bottom -->
+  <div class="bottom-bar">
+    <button class="btn-summary" onclick="showSummary()">📋 まとめを見る</button>
+    <button class="btn-word" onclick="exportWord()">📄 Word出力</button>
+  </div>
+
+  <!-- Summary Modal -->
+  <div id="modal" class="modal-overlay" style="display:none" onclick="if(event.target===this)closeModal()">
+    <div class="modal-box">
+      <div class="modal-head">
+        <h2>報告書 プレビュー</h2>
+        <button class="btn-close" onclick="closeModal()">✕</button>
+      </div>
+      <div class="modal-body" id="summary-body"></div>
+    </div>
+  </div>
+
+  <script>
+    // ─── State ───────────────────────────────────────────
+    const params = new URLSearchParams(location.search);
+    const ghNum = params.get('gh') || '1';
+    const today = new Date();
+
+    // ─── Helpers ─────────────────────────────────────────
+    function getReiwaDate() {
+      const reiwa = today.getFullYear() - 2018;
+      const m = today.getMonth() + 1;
+      const d = today.getDate();
+      const days = ['日','月','火','水','木','金','土'];
+      return `令和${reiwa}年${m}月${d}日（${days[today.getDay()]}）`;
+    }
+    function getISODate() {
+      return today.toISOString().slice(0,10);
+    }
+    function autoExpand(el) {
+      el.style.height = 'auto';
+      el.style.height = el.scrollHeight + 'px';
+    }
+
+    // ─── Header ──────────────────────────────────────────
+    document.getElementById('gh-title').textContent = `グループホーム ${ghNum}`;
+    document.getElementById('date-display').textContent = getReiwaDate();
+    document.title = `GH${ghNum} 業務日報`;
+
+    // ─── Load residents ───────────────────────────────────
+    function getResidents() {
+      const data = JSON.parse(localStorage.getItem('ghResidents') || '{}');
+      return data[ghNum] || [];
+    }
+
+    const residents = getResidents();
+    const container = document.getElementById('residents-container');
+
+    if (residents.length === 0) {
+      container.innerHTML = `
+        <div class="no-residents">
+          <p>利用者が登録されていません</p>
+          <a href="settings.html" class="btn-go-settings">⚙️ 設定で利用者を登録する</a>
+        </div>
+      `;
+    } else {
+      residents.forEach((name, i) => {
+        const div = document.createElement('div');
+        div.className = 'resident-entry';
+        div.dataset.name = name;
+        div.innerHTML = `
+          <div class="resident-name-label">${name}</div>
+          <textarea data-key="r${i}" placeholder="${name}の様子を記入（帰宅〜朝の流れ）..."></textarea>
+        `;
+        container.appendChild(div);
+      });
+    }
+
+    // ─── Auto-expand all textareas ────────────────────────
+    document.querySelectorAll('textarea').forEach(ta => {
+      ta.addEventListener('input', function() {
+        autoExpand(this);
+        scheduleSave();
+      });
+    });
+
+    // ─── Reporter persistence ─────────────────────────────
+    const reporterEl = document.getElementById('reporter');
+    reporterEl.value = localStorage.getItem('lastReporter') || '';
+    reporterEl.addEventListener('input', () => {
+      localStorage.setItem('lastReporter', reporterEl.value.trim());
+      scheduleSave();
+    });
+
+    // ─── Draft save/load ──────────────────────────────────
+    const draftKey = `draft_gh${ghNum}_${getISODate()}`;
+    let saveTimer = null;
+
+    function scheduleSave() {
+      clearTimeout(saveTimer);
+      saveTimer = setTimeout(saveDraft, 800);
+    }
+
+    function saveDraft() {
+      const data = { reporter: reporterEl.value };
+      document.querySelectorAll('.resident-entry').forEach(entry => {
+        data[entry.dataset.name] = entry.querySelector('textarea').value;
+      });
+      data.__health = document.getElementById('health-status').value;
+      localStorage.setItem(draftKey, JSON.stringify(data));
+      document.getElementById('draft-indicator').textContent = '下書き保存済み';
+      setTimeout(() => document.getElementById('draft-indicator').textContent = '', 2000);
+    }
+
+    function loadDraft() {
+      const raw = localStorage.getItem(draftKey);
+      if (!raw) return;
+      try {
+        const data = JSON.parse(raw);
+        if (data.reporter) reporterEl.value = data.reporter;
+        document.querySelectorAll('.resident-entry').forEach(entry => {
+          const ta = entry.querySelector('textarea');
+          ta.value = data[entry.dataset.name] || '';
+          autoExpand(ta);
+        });
+        const hta = document.getElementById('health-status');
+        hta.value = data.__health || '';
+        autoExpand(hta);
+      } catch(e) {}
+    }
+
+    // ─── Summary Modal ────────────────────────────────────
+    function showSummary() {
+      const reporter = reporterEl.value || '（未入力）';
+      const health = document.getElementById('health-status').value;
+
+      let entriesHTML = '';
+      document.querySelectorAll('.resident-entry').forEach(entry => {
+        const name = entry.dataset.name;
+        const text = entry.querySelector('textarea').value || '（未入力）';
+        entriesHTML += `
+          <div class="s-resident">
+            <div class="r-name">${name}</div>
+            <div class="r-text">${text}</div>
+          </div>
+        `;
+      });
+
+      document.getElementById('summary-body').innerHTML = `
+        <table class="s-header-table">
+          <tr>
+            <td rowspan="2" style="width:34%">
+              <div style="font-weight:bold;font-size:14px;margin-bottom:4px">報告書</div>
+              <div style="font-size:12px;color:#444">${getReiwaDate()}</div>
+            </td>
+            <td rowspan="2" class="s-gh-name">ホーム ${ghNum}</td>
+            <td class="s-sig-head">管理者</td>
+            <td class="s-sig-head">サービス管理責任者</td>
+            <td class="s-sig-head">報告者</td>
+          </tr>
+          <tr>
+            <td class="s-sig-box"></td>
+            <td class="s-sig-box"></td>
+            <td style="font-size:14px;font-weight:bold;padding:8px;min-width:60px">${reporter}</td>
+          </tr>
+        </table>
+
+        <div class="s-section-title">【特記事項】</div>
+        ${entriesHTML || '<p style="color:#999;font-size:13px">（利用者未登録）</p>'}
+
+        <div class="s-section-title">【健康状況】</div>
+        <div class="s-health">${health || '（未入力）'}</div>
+        <div style="height:20px"></div>
+      `;
+
+      document.getElementById('modal').style.display = 'flex';
+    }
+
+    function closeModal() {
+      document.getElementById('modal').style.display = 'none';
+    }
+
+    // ─── Word Export ──────────────────────────────────────
+    function exportWord() {
+      const reporter = reporterEl.value || '';
+      const dateStr = getReiwaDate();
+      const health = document.getElementById('health-status').value;
+
+      let entriesHTML = '';
+      document.querySelectorAll('.resident-entry').forEach(entry => {
+        const name = entry.dataset.name;
+        const text = (entry.querySelector('textarea').value || '')
+          .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+          .replace(/\n/g, '<br>');
+        entriesHTML += `<p style="margin:0 0 10pt 0;line-height:1.8">・${name}：${text}</p>`;
+      });
+
+      const healthEsc = health
+        .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+        .replace(/\n/g,'<br>');
+
+      const wordHTML = `<!DOCTYPE html>
+<html><head><meta charset="UTF-8">
+<style>
+  body { font-family: 'MS Mincho','MS Gothic','Meiryo',sans-serif; font-size:10.5pt; margin:20pt; }
+  table { border-collapse:collapse; width:100%; margin-bottom:14pt; }
+  td { border:1pt solid black; padding:6pt; vertical-align:middle; }
+  p { margin:0; }
+</style>
+</head>
+<body>
+<table>
+  <tr>
+    <td rowspan="2" style="width:32%">
+      <p style="font-weight:bold;font-size:12pt;margin-bottom:4pt">報告書</p>
+      <p style="font-size:10pt">${dateStr}</p>
+    </td>
+    <td rowspan="2" style="text-align:center;font-size:18pt;font-weight:bold;width:26%">ホーム&nbsp;${ghNum}</td>
+    <td style="text-align:center;font-size:9pt;background:#f5f5f5">管理者</td>
+    <td style="text-align:center;font-size:9pt;background:#f5f5f5">サービス管理責任者</td>
+    <td style="text-align:center;font-size:9pt;background:#f5f5f5">報告者</td>
+  </tr>
+  <tr>
+    <td style="height:44pt">&nbsp;</td>
+    <td style="height:44pt">&nbsp;</td>
+    <td style="height:44pt;font-weight:bold;font-size:11pt">${reporter}</td>
+  </tr>
+</table>
+
+<p style="font-weight:bold;margin-bottom:8pt">【特記事項】</p>
+${entriesHTML}
+<br>
+<p style="font-weight:bold;margin-bottom:8pt">【健康状況】</p>
+<p style="line-height:1.8">${healthEsc || '&nbsp;'}</p>
+</body></html>`;
+
+      try {
+        const blob = htmlDocx.asBlob(wordHTML);
+        const dateNum = getISODate().replace(/-/g,'');
+        saveAs(blob, `GH${ghNum}_業務日報_${dateNum}.docx`);
+      } catch(e) {
+        alert('Word出力に失敗しました。\n' + e);
+      }
+    }
+
+    // ─── Init ─────────────────────────────────────────────
+    loadDraft();
+  </script>
+</body>
+</html>
