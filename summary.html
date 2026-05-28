@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>報告書 - こもれびホーム</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Hiragino Kaku Gothic ProN', 'Meiryo', 'Yu Gothic', sans-serif;
+      background: #eef2f7;
+      min-height: 100vh;
+      padding-bottom: 40px;
+    }
+
+    .page-header {
+      background: #4a90d9;
+      color: white;
+      padding: 14px 20px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+    }
+    .page-header a { color: white; text-decoration: none; font-size: 26px; }
+    .page-header .h-info h1 { font-size: 16px; font-weight: bold; }
+    .page-header .h-info .sub { font-size: 12px; opacity: 0.85; margin-top: 2px; }
+
+    .content { max-width: 720px; margin: 0 auto; padding: 16px; }
+
+    /* REPORT HEADER TABLE */
+    .report-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-bottom: 20px;
+      background: white;
+      border-radius: 10px;
+      overflow: hidden;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.06);
+    }
+    .report-table td {
+      border: 1.5px solid #ccc;
+      padding: 10px 12px;
+      vertical-align: middle;
+    }
+    .report-table .gh-name {
+      text-align: center;
+      font-size: 18px;
+      font-weight: bold;
+      color: #1a2a3a;
+    }
+    .report-table .sig-head {
+      text-align: center;
+      font-size: 11px;
+      color: #666;
+      background: #f5f5f5;
+    }
+    .report-table .sig-box { height: 48px; min-width: 70px; }
+    .report-table .reporter-cell {
+      font-size: 15px;
+      font-weight: bold;
+      color: #1a2a3a;
+    }
+
+    /* SECTION */
+    .section-card {
+      background: white;
+      border-radius: 12px;
+      padding: 18px;
+      margin-bottom: 14px;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.06);
+    }
+    .section-title {
+      font-weight: bold;
+      font-size: 14px;
+      color: #4a90d9;
+      margin-bottom: 14px;
+      padding-bottom: 8px;
+      border-bottom: 2px solid #eef2f7;
+    }
+
+    /* RESIDENT */
+    .resident-block { margin-bottom: 18px; padding-bottom: 18px; border-bottom: 1px solid #f0f2f5; }
+    .resident-block:last-child { border-bottom: none; margin-bottom: 0; padding-bottom: 0; }
+    .resident-name {
+      font-size: 15px;
+      font-weight: bold;
+      color: #1a2a3a;
+      margin-bottom: 8px;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .resident-name::before { content: '・'; color: #4a90d9; font-size: 18px; }
+    .resident-text {
+      font-size: 14px;
+      line-height: 1.9;
+      color: #2a3a4a;
+      white-space: pre-wrap;
+      background: #f9fbff;
+      padding: 12px 14px;
+      border-radius: 8px;
+    }
+
+    /* ERROR / EMPTY */
+    .error-state {
+      text-align: center;
+      padding: 60px 20px;
+      color: #999;
+    }
+    .error-state .icon { font-size: 48px; margin-bottom: 12px; }
+
+    /* TIMESTAMP */
+    .timestamp {
+      text-align: right;
+      font-size: 11px;
+      color: #aaa;
+      margin-top: 8px;
+    }
+
+    @media print {
+      body { background: white; }
+      .page-header { display: none; }
+      .content { padding: 0; max-width: 100%; }
+      .section-card, .report-table { box-shadow: none; }
+    }
+  </style>
+</head>
+<body>
+
+  <div class="page-header">
+    <a href="index.html">←</a>
+    <div class="h-info">
+      <h1 id="header-title">報告書</h1>
+      <div class="sub" id="header-sub"></div>
+    </div>
+  </div>
+
+  <div class="content" id="content">
+    <div class="error-state">
+      <div class="icon">⏳</div>
+      <p>読み込み中...</p>
+    </div>
+  </div>
+
+  <script>
+    function getReiwaDate(isoDate) {
+      const [y, m, d] = isoDate.split('-').map(Number);
+      const dt = new Date(y, m - 1, d);
+      const days = ['日','月','火','水','木','金','土'];
+      return `令和${y - 2018}年${m}月${d}日（${days[dt.getDay()]}）`;
+    }
+
+    function render(data) {
+      const { ghName, date, reporter, residents } = data;
+      const dateStr = getReiwaDate(date);
+
+      document.getElementById('header-title').textContent = ghName;
+      document.getElementById('header-sub').textContent = dateStr;
+      document.title = `${ghName} 報告書 ${dateStr}`;
+
+      let residentRows = '';
+      Object.entries(residents || {}).forEach(([name, text]) => {
+        residentRows += `
+          <div class="resident-block">
+            <div class="resident-name">${name}</div>
+            <div class="resident-text">${text || '（記録なし）'}</div>
+          </div>
+        `;
+      });
+
+      document.getElementById('content').innerHTML = `
+        <table class="report-table">
+          <tr>
+            <td rowspan="2" style="width:35%">
+              <div style="font-weight:bold;font-size:15px;margin-bottom:4px">報告書</div>
+              <div style="font-size:13px;color:#555">${dateStr}</div>
+            </td>
+            <td rowspan="2" class="gh-name">${ghName}</td>
+            <td class="sig-head">管理者</td>
+            <td class="sig-head">サービス管理責任者</td>
+            <td class="sig-head">報告者</td>
+          </tr>
+          <tr>
+            <td class="sig-box"></td>
+            <td class="sig-box"></td>
+            <td class="sig-box reporter-cell">${reporter || ''}</td>
+          </tr>
+        </table>
+
+        <div class="section-card">
+          <div class="section-title">【特記事項】</div>
+          ${residentRows || '<p style="color:#999">（記録なし）</p>'}
+        </div>
+
+        <div class="timestamp" id="ts"></div>
+      `;
+    }
+
+    // Decode URL hash
+    const hash = location.hash.slice(1);
+    if (!hash) {
+      document.getElementById('content').innerHTML = `
+        <div class="error-state">
+          <div class="icon">🔗</div>
+          <p>URLが正しくありません。<br>報告ページからシェアURLを生成してください。</p>
+        </div>
+      `;
+    } else {
+      try {
+        const json = decodeURIComponent(escape(atob(hash)));
+        const data = JSON.parse(json);
+        render(data);
+        if (data.sharedAt) {
+          document.getElementById('ts').textContent = `共有日時: ${new Date(data.sharedAt).toLocaleString('ja-JP')}`;
+        }
+      } catch(e) {
+        document.getElementById('content').innerHTML = `
+          <div class="error-state">
+            <div class="icon">⚠️</div>
+            <p>データの読み込みに失敗しました。<br>URLが壊れている可能性があります。</p>
+          </div>
+        `;
+      }
+    }
+  </script>
+</body>
+</html>
