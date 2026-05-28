@@ -316,6 +316,11 @@
     <div id="residents-container"></div>
   </div>
 
+  <div class="section">
+    <div class="section-label">【不足品】</div>
+    <textarea id="shortage" placeholder="不足している物品を記入（例：トイレットペーパー、シャンプーなど）..." style="min-height:80px"></textarea>
+  </div>
+
   <div class="draft-indicator" id="draft-indicator"></div>
 
   <div class="bottom-bar">
@@ -442,8 +447,9 @@
     async function saveCurrentData() {
       const dateISO = dateEl.value;
       const reporter = reporterEl.value.trim();
+      const shortage = document.getElementById('shortage').value.trim();
       const residentsData = {};
-      let hasContent = !!reporter;
+      let hasContent = !!reporter || !!shortage;
       document.querySelectorAll('.resident-entry').forEach(entry => {
         const val = entry.querySelector('textarea').value;
         residentsData[entry.dataset.name] = val;
@@ -458,6 +464,7 @@
         report_date: dateISO,
         reporter: reporter,
         residents: residentsData,
+        shortage: shortage,
         updated_at: new Date().toISOString()
       }, { onConflict: 'gh_num,report_date' });
 
@@ -483,6 +490,7 @@
 
       if (data) {
         reporterEl.value = data.reporter || '';
+        document.getElementById('shortage').value = data.shortage || '';
         document.querySelectorAll('.resident-entry').forEach(entry => {
           const ta = entry.querySelector('textarea');
           ta.value = (data.residents || {})[entry.dataset.name] || '';
@@ -490,6 +498,7 @@
         });
       } else {
         reporterEl.value = localStorage.getItem('lastReporter') || '';
+        document.getElementById('shortage').value = '';
         document.querySelectorAll('.resident-entry textarea').forEach(ta => {
           ta.value = '';
           ta.style.height = '';
@@ -534,6 +543,10 @@
         </table>
         <div class="s-sec-title">【特記事項】</div>
         ${entriesHTML || '<p style="color:#999;font-size:13px">（利用者未登録）</p>'}
+        ${document.getElementById('shortage').value.trim() ? `
+          <div class="s-sec-title">【不足品】</div>
+          <div class="s-resident"><div class="r-text">${document.getElementById('shortage').value}</div></div>
+        ` : ''}
         <div style="height:20px"></div>
       `;
 
