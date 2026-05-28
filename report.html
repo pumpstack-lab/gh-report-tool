@@ -280,6 +280,50 @@
       font-size: 13px; line-height: 1.8; white-space: pre-wrap;
       background: #f9f9f9; padding: 10px 14px; border-radius: 8px;
     }
+
+    /* SHORTAGE LIST */
+    .shortage-item-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+    .shortage-bullet { color: #4a90d9; font-size: 18px; flex-shrink: 0; }
+    .shortage-item-input {
+      flex: 1;
+      padding: 10px 12px;
+      border: 1.5px solid #d0d8e8;
+      border-radius: 8px;
+      font-size: 14px;
+      font-family: inherit;
+      color: #1a2a3a;
+    }
+    .shortage-item-input:focus { outline: none; border-color: #4a90d9; }
+    .btn-remove-shortage {
+      width: 28px; height: 28px;
+      background: #f0f0f0;
+      border: none;
+      border-radius: 50%;
+      font-size: 14px;
+      cursor: pointer;
+      flex-shrink: 0;
+      color: #888;
+    }
+    .btn-remove-shortage:active { background: #ffecec; color: #e74c3c; }
+    .btn-add-shortage {
+      margin-top: 8px;
+      padding: 10px 16px;
+      background: #f0f6ff;
+      border: 1.5px dashed #4a90d9;
+      border-radius: 8px;
+      color: #4a90d9;
+      font-size: 14px;
+      font-weight: bold;
+      cursor: pointer;
+      font-family: inherit;
+      width: 100%;
+    }
+    .btn-add-shortage:active { background: #e0eeff; }
   </style>
 </head>
 <body>
@@ -318,7 +362,8 @@
 
   <div class="section">
     <div class="section-label">【不足品】</div>
-    <textarea id="shortage" placeholder="不足している物品を記入（例：トイレットペーパー、シャンプーなど）..." style="min-height:80px"></textarea>
+    <div id="shortage-list"></div>
+    <button type="button" class="btn-add-shortage" id="btn-add-shortage">＋ 項目を追加</button>
   </div>
 
   <div class="draft-indicator" id="draft-indicator"></div>
@@ -429,6 +474,50 @@
       });
     });
 
+    // ─── Shortage List ────────────────────────────────────
+    let shortageItems = []; // [{text, checked}]
+
+    function renderShortageList() {
+      const list = document.getElementById('shortage-list');
+      list.innerHTML = '';
+      shortageItems.forEach((item, idx) => {
+        const div = document.createElement('div');
+        div.className = 'shortage-item-row';
+        const bullet = document.createElement('span');
+        bullet.className = 'shortage-bullet';
+        bullet.textContent = '・';
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.className = 'shortage-item-input';
+        input.value = item.text;
+        input.placeholder = '品目を入力';
+        input.addEventListener('input', (e) => {
+          shortageItems[idx].text = e.target.value;
+          scheduleAutoSave();
+        });
+        const removeBtn = document.createElement('button');
+        removeBtn.type = 'button';
+        removeBtn.className = 'btn-remove-shortage';
+        removeBtn.textContent = '✕';
+        removeBtn.addEventListener('click', () => {
+          shortageItems.splice(idx, 1);
+          renderShortageList();
+          scheduleAutoSave();
+        });
+        div.appendChild(bullet);
+        div.appendChild(input);
+        div.appendChild(removeBtn);
+        list.appendChild(div);
+      });
+    }
+
+    document.getElementById('btn-add-shortage').addEventListener('click', () => {
+      shortageItems.push({ text: '', checked: false });
+      renderShortageList();
+      const inputs = document.querySelectorAll('.shortage-item-input');
+      if (inputs.length > 0) inputs[inputs.length - 1].focus();
+    });
+
     // ─── Reporter (name cached in localStorage for convenience) ───
     const reporterEl = document.getElementById('reporter');
     reporterEl.value = localStorage.getItem('lastReporter') || '';
@@ -447,9 +536,11 @@
     async function saveCurrentData() {
       const dateISO = dateEl.value;
       const reporter = reporterEl.value.trim();
-      const shortage = document.getElementById('shortage').value.trim();
+      const shortageData = shortageItems
+        .filter(item => item.text.trim())
+        .map(item => ({ text: item.text.trim(), checked: item.checked || false }));
       const residentsData = {};
-      let hasContent = !!reporter || !!shortage;
+      let hasContent = !!reporter || shortageData.length > 0;
       document.querySelectorAll('.resident-entry').forEach(entry => {
         const val = entry.querySelector('textarea').value;
         residentsData[entry.dataset.name] = val;
@@ -464,7 +555,7 @@
         report_date: dateISO,
         reporter: reporter,
         residents: residentsData,
-        shortage: shortage,
+        shortage: shortageData,
         updated_at: new Date().toISOString()
       }, { onConflict: 'gh_num,report_date' });
 
@@ -490,7 +581,12 @@
 
       if (data) {
         reporterEl.value = data.reporter || '';
-        document.getElementById('shortage').value = data.shortage || '';
+        shortageItems = (data.shortage || []).map(item =>
+          typeof item === 'string'
+            ? { text: item, checked: false }
+            : { text: item.text || '', checked: !!item.checked }
+        );
+        renderShortageList();
         document.querySelectorAll('.resident-entry').forEach(entry => {
           const ta = entry.querySelector('textarea');
           ta.value = (data.residents || {})[entry.dataset.name] || '';
@@ -498,7 +594,8 @@
         });
       } else {
         reporterEl.value = localStorage.getItem('lastReporter') || '';
-        document.getElementById('shortage').value = '';
+        shortageItems = [];
+        renderShortageList();
         document.querySelectorAll('.resident-entry textarea').forEach(ta => {
           ta.value = '';
           ta.style.height = '';
@@ -543,9 +640,11 @@
         </table>
         <div class="s-sec-title">【特記事項】</div>
         ${entriesHTML || '<p style="color:#999;font-size:13px">（利用者未登録）</p>'}
-        ${document.getElementById('shortage').value.trim() ? `
+        ${shortageItems.filter(i => i.text.trim()).length > 0 ? `
           <div class="s-sec-title">【不足品】</div>
-          <div class="s-resident"><div class="r-text">${document.getElementById('shortage').value}</div></div>
+          ${shortageItems.filter(i => i.text.trim()).map(i =>
+            `<div class="s-resident"><div class="r-name">${i.text}</div></div>`
+          ).join('')}
         ` : ''}
         <div style="height:20px"></div>
       `;
