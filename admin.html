@@ -1,0 +1,418 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>管理者ダッシュボード - こもれびホーム</title>
+  <script src="config.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Hiragino Kaku Gothic ProN', 'Meiryo', 'Yu Gothic', sans-serif;
+      background: #eef2f7;
+      min-height: 100vh;
+      padding-bottom: 40px;
+    }
+
+    .page-header {
+      background: #2c3e50;
+      color: white;
+      padding: 14px 20px;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+    }
+    .header-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 10px;
+    }
+    .page-header h1 { font-size: 17px; font-weight: bold; }
+    .realtime-badge {
+      font-size: 12px;
+      background: #2ecc71;
+      color: white;
+      padding: 3px 10px;
+      border-radius: 12px;
+      font-weight: bold;
+    }
+    .realtime-badge.offline { background: #e74c3c; }
+
+    .date-bar {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .date-bar label { font-size: 13px; opacity: 0.8; }
+    .date-bar input[type="date"] {
+      background: rgba(255,255,255,0.15);
+      border: 1px solid rgba(255,255,255,0.3);
+      border-radius: 8px;
+      color: white;
+      padding: 5px 10px;
+      font-size: 14px;
+      font-family: inherit;
+    }
+    .date-bar input[type="date"]::-webkit-calendar-picker-indicator { filter: invert(1); }
+    .date-formatted { font-size: 14px; opacity: 0.9; font-weight: bold; }
+
+    .content { padding: 16px; max-width: 720px; margin: 0 auto; }
+
+    .summary-bar {
+      display: flex;
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+    .summary-chip {
+      flex: 1;
+      background: white;
+      border-radius: 10px;
+      padding: 12px;
+      text-align: center;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.06);
+    }
+    .summary-chip .num {
+      font-size: 28px;
+      font-weight: bold;
+      line-height: 1;
+      margin-bottom: 4px;
+    }
+    .summary-chip .lbl { font-size: 11px; color: #7a8a9a; }
+    .chip-done .num { color: #2ecc71; }
+    .chip-pending .num { color: #e74c3c; }
+
+    .gh-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 12px;
+    }
+
+    .gh-card {
+      background: white;
+      border-radius: 12px;
+      padding: 16px;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.06);
+      border-left: 4px solid #ddd;
+      transition: all 0.2s;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .gh-card.has-report { border-left-color: #2ecc71; }
+    .gh-card.loading { opacity: 0.5; }
+
+    .card-name {
+      font-size: 14px;
+      font-weight: bold;
+      color: #1a2a3a;
+      line-height: 1.3;
+    }
+    .card-status {
+      font-size: 13px;
+      font-weight: bold;
+      padding: 3px 10px;
+      border-radius: 12px;
+      display: inline-block;
+      width: fit-content;
+    }
+    .status-ok { background: #e8faf0; color: #2ecc71; }
+    .status-none { background: #f5f5f5; color: #aaa; }
+
+    .card-reporter { font-size: 13px; color: #5a6a7a; }
+    .card-time { font-size: 11px; color: #aaa; }
+
+    .card-link {
+      display: inline-block;
+      margin-top: 6px;
+      font-size: 13px;
+      color: #4a90d9;
+      text-decoration: none;
+      font-weight: bold;
+    }
+    .card-link:hover { text-decoration: underline; }
+
+    /* MODAL */
+    .modal-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.5);
+      z-index: 200;
+      display: flex;
+      align-items: flex-end;
+    }
+    .modal-box {
+      background: white;
+      border-radius: 20px 20px 0 0;
+      width: 100%;
+      max-height: 88vh;
+      display: flex;
+      flex-direction: column;
+    }
+    .modal-head {
+      padding: 16px 20px;
+      border-bottom: 1px solid #eee;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-shrink: 0;
+    }
+    .modal-head h2 { font-size: 15px; font-weight: bold; }
+    .btn-close {
+      background: #f0f0f0;
+      border: none;
+      border-radius: 50%;
+      width: 32px; height: 32px;
+      font-size: 16px;
+      cursor: pointer;
+    }
+    .modal-body {
+      flex: 1;
+      overflow-y: auto;
+      padding: 20px;
+      -webkit-overflow-scrolling: touch;
+    }
+
+    /* DETAIL */
+    .d-reporter { font-size: 14px; color: #5a6a7a; margin-bottom: 14px; }
+    .d-resident { margin-bottom: 14px; }
+    .d-resident .r-name { font-weight: bold; font-size: 14px; margin-bottom: 4px; }
+    .d-resident .r-name::before { content: '・'; color: #4a90d9; }
+    .d-resident .r-text {
+      font-size: 13px; line-height: 1.8; white-space: pre-wrap;
+      background: #f9f9f9; padding: 10px 14px; border-radius: 8px;
+    }
+    .d-empty { color: #999; font-size: 13px; text-align: center; padding: 20px; }
+
+    .error-msg {
+      background: #ffecec;
+      border: 1px solid #e74c3c;
+      border-radius: 10px;
+      padding: 16px;
+      margin-bottom: 16px;
+      font-size: 14px;
+      color: #c0392b;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="page-header">
+    <div class="header-top">
+      <h1>🏠 管理者ダッシュボード</h1>
+      <span class="realtime-badge" id="rt-badge">🔄 接続中...</span>
+    </div>
+    <div class="date-bar">
+      <label>日付</label>
+      <input type="date" id="admin-date">
+      <span class="date-formatted" id="date-formatted"></span>
+    </div>
+  </div>
+
+  <div class="content">
+    <div id="error-area"></div>
+
+    <div class="summary-bar">
+      <div class="summary-chip chip-done">
+        <div class="num" id="count-done">-</div>
+        <div class="lbl">記録あり</div>
+      </div>
+      <div class="summary-chip chip-pending">
+        <div class="num" id="count-pending">-</div>
+        <div class="lbl">未記入</div>
+      </div>
+    </div>
+
+    <div class="gh-grid" id="gh-grid"></div>
+  </div>
+
+  <!-- Detail Modal -->
+  <div id="modal" class="modal-overlay" style="display:none" onclick="if(event.target===this)closeModal()">
+    <div class="modal-box">
+      <div class="modal-head">
+        <h2 id="modal-title">詳細</h2>
+        <button class="btn-close" onclick="closeModal()">✕</button>
+      </div>
+      <div class="modal-body" id="modal-body"></div>
+    </div>
+  </div>
+
+  <script>
+    const GH_NAMES = [
+      'こもれびホーム３−２',
+      'こもれびホーム４',
+      'こもれびホーム５−１',
+      'こもれびホーム５−２',
+      'こもれびホーム６',
+      'こもれびホームマハロ'
+    ];
+
+    // ─── Supabase ─────────────────────────────────────────
+    const { createClient } = supabase;
+    const db = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+    // ─── Date ─────────────────────────────────────────────
+    function todayISO() {
+      const t = new Date();
+      return `${t.getFullYear()}-${String(t.getMonth()+1).padStart(2,'0')}-${String(t.getDate()).padStart(2,'0')}`;
+    }
+    function getReiwaDate(iso) {
+      const [y, m, d] = iso.split('-').map(Number);
+      const dt = new Date(y, m - 1, d);
+      const days = ['日','月','火','水','木','金','土'];
+      return `令和${y-2018}年${m}月${d}日（${days[dt.getDay()]}）`;
+    }
+
+    let selectedDate = todayISO();
+    const adminDateEl = document.getElementById('admin-date');
+    adminDateEl.value = selectedDate;
+    document.getElementById('date-formatted').textContent = getReiwaDate(selectedDate);
+
+    adminDateEl.addEventListener('change', () => {
+      selectedDate = adminDateEl.value;
+      document.getElementById('date-formatted').textContent = getReiwaDate(selectedDate);
+      loadAllHomes(selectedDate);
+    });
+
+    // ─── Load ─────────────────────────────────────────────
+    async function loadAllHomes(dateISO) {
+      setCardsLoading();
+      const { data, error } = await db
+        .from('reports')
+        .select('*')
+        .eq('report_date', dateISO)
+        .order('gh_num');
+
+      if (error) {
+        showError('データの読み込みに失敗しました: ' + error.message);
+        return;
+      }
+      renderGrid(data || [], dateISO);
+    }
+
+    function setCardsLoading() {
+      const grid = document.getElementById('gh-grid');
+      for (let i = 1; i <= 6; i++) {
+        const existing = document.getElementById(`card-${i}`);
+        if (existing) existing.classList.add('loading');
+      }
+    }
+
+    function renderGrid(reports, dateISO) {
+      const reportMap = {};
+      reports.forEach(r => reportMap[r.gh_num] = r);
+
+      const grid = document.getElementById('gh-grid');
+      grid.innerHTML = '';
+
+      let done = 0;
+      for (let i = 1; i <= 6; i++) {
+        const report = reportMap[i];
+        if (report) done++;
+        grid.appendChild(buildCard(i, report, dateISO));
+      }
+
+      document.getElementById('count-done').textContent = done;
+      document.getElementById('count-pending').textContent = 6 - done;
+    }
+
+    function buildCard(ghNum, report, dateISO) {
+      const ghName = GH_NAMES[ghNum - 1];
+      const hasReport = !!report;
+      const reporter = report?.reporter || '';
+      const updatedAt = report?.updated_at
+        ? new Date(report.updated_at).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' })
+        : '';
+      const residents = report?.residents || {};
+      const residentCount = Object.values(residents).filter(v => v?.trim()).length;
+
+      const div = document.createElement('div');
+      div.className = `gh-card ${hasReport ? 'has-report' : ''}`;
+      div.id = `card-${ghNum}`;
+
+      div.innerHTML = `
+        <div class="card-name">${ghName}</div>
+        <span class="card-status ${hasReport ? 'status-ok' : 'status-none'}">
+          ${hasReport ? `✓ ${residentCount}名記録` : '未記入'}
+        </span>
+        ${reporter ? `<div class="card-reporter">報告者: ${reporter}</div>` : ''}
+        ${updatedAt ? `<div class="card-time">更新: ${updatedAt}</div>` : ''}
+      `;
+
+      if (hasReport) {
+        const link = document.createElement('a');
+        link.href = '#';
+        link.className = 'card-link';
+        link.textContent = '詳細を見る →';
+        link.onclick = (e) => { e.preventDefault(); showDetail(ghNum, report); };
+        div.appendChild(link);
+      }
+
+      return div;
+    }
+
+    // ─── Detail Modal ─────────────────────────────────────
+    function showDetail(ghNum, report) {
+      const ghName = GH_NAMES[ghNum - 1];
+      document.getElementById('modal-title').textContent = ghName;
+
+      const residents = report.residents || {};
+      let html = '';
+
+      if (report.reporter) {
+        html += `<div class="d-reporter">報告者: ${report.reporter}</div>`;
+      }
+
+      const entries = Object.entries(residents);
+      if (entries.length === 0) {
+        html += '<div class="d-empty">記録なし</div>';
+      } else {
+        entries.forEach(([name, text]) => {
+          html += `
+            <div class="d-resident">
+              <div class="r-name">${name}</div>
+              <div class="r-text">${text || '（未入力）'}</div>
+            </div>
+          `;
+        });
+      }
+
+      document.getElementById('modal-body').innerHTML = html;
+      document.getElementById('modal').style.display = 'flex';
+    }
+
+    function closeModal() {
+      document.getElementById('modal').style.display = 'none';
+    }
+
+    // ─── Realtime ─────────────────────────────────────────
+    const channel = db.channel('admin-realtime')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'reports' },
+        () => loadAllHomes(selectedDate)
+      )
+      .subscribe((status) => {
+        const badge = document.getElementById('rt-badge');
+        if (status === 'SUBSCRIBED') {
+          badge.textContent = '🟢 リアルタイム';
+          badge.classList.remove('offline');
+        } else {
+          badge.textContent = '⚠️ 再接続中';
+          badge.classList.add('offline');
+        }
+      });
+
+    // ─── Error ────────────────────────────────────────────
+    function showError(msg) {
+      document.getElementById('error-area').innerHTML =
+        `<div class="error-msg">⚠️ ${msg}</div>`;
+    }
+
+    // ─── Init ─────────────────────────────────────────────
+    // Render placeholder cards immediately
+    renderGrid([], selectedDate);
+    loadAllHomes(selectedDate);
+  </script>
+</body>
+</html>
