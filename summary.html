@@ -160,7 +160,7 @@
       return `令和${y - 2018}年${m}月${d}日（${days[dt.getDay()]}）`;
     }
 
-    function render(ghName, dateStr, reporter, residents, updatedAt) {
+    function render(ghName, dateStr, reporter, residents, updatedAt, shortage) {
       document.getElementById('header-title').textContent = ghName;
       document.getElementById('header-sub').textContent = dateStr;
       document.title = `${ghName} 報告書 ${dateStr}`;
@@ -202,6 +202,13 @@
           <div class="section-title">【特記事項】</div>
           ${residentRows || '<p style="color:#999">（記録なし）</p>'}
         </div>
+
+        ${shortage ? `
+        <div class="section-card">
+          <div class="section-title" style="color:#f39c12">【不足品】</div>
+          <div style="font-size:14px;line-height:1.8;white-space:pre-wrap">${shortage}</div>
+        </div>
+        ` : ''}
 
         <div class="timestamp">${tsText}</div>
       `;
@@ -250,7 +257,7 @@
         return;
       }
 
-      render(ghName, dateStr, data.reporter, data.residents, data.updated_at);
+      render(ghName, dateStr, data.reporter, data.residents, data.updated_at, data.shortage);
     }
 
     load();
