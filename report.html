@@ -47,37 +47,44 @@
       border-bottom: 2px solid #eef2f7;
     }
 
-    /* DATE PICKER */
-    .date-row {
+    /* DATE CARD — entire area is tappable */
+    .date-card-section {
+      position: relative;
+      cursor: pointer;
       display: flex;
       align-items: center;
-      gap: 12px;
+      gap: 14px;
     }
-    .date-row label {
-      font-size: 14px;
-      color: #5a6a7a;
-      font-weight: bold;
-      white-space: nowrap;
-    }
-    .date-input {
+    .date-card-section:active { background: #f5faff; }
+    .date-card-inner {
+      display: flex;
+      align-items: center;
+      gap: 14px;
       flex: 1;
-      padding: 11px 14px;
-      border: 1.5px solid #d0d8e8;
-      border-radius: 10px;
-      font-size: 15px;
-      font-family: inherit;
-      color: #1a2a3a;
+      pointer-events: none;
     }
-    .date-input:focus {
-      outline: none;
-      border-color: #4a90d9;
-      box-shadow: 0 0 0 3px rgba(74,144,217,0.15);
-    }
+    .date-card-icon { font-size: 26px; flex-shrink: 0; }
+    .date-card-label { font-size: 12px; color: #7a8a9a; margin-bottom: 3px; }
+    .date-card-text { font-size: 17px; font-weight: bold; color: #1a2a3a; }
     .existing-badge {
+      margin-left: auto;
       font-size: 12px;
       color: #2ecc71;
       font-weight: bold;
       white-space: nowrap;
+      flex-shrink: 0;
+      pointer-events: none;
+    }
+    /* Invisible date input covers the entire card */
+    #report-date {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      opacity: 0;
+      cursor: pointer;
+      border: none;
+      background: none;
     }
 
     /* REPORTER */
@@ -267,10 +274,6 @@
       font-size: 13px; line-height: 1.8; white-space: pre-wrap;
       background: #f9f9f9; padding: 10px 14px; border-radius: 8px;
     }
-    .s-health {
-      font-size: 13px; line-height: 1.8; white-space: pre-wrap;
-      background: #f9f9f9; padding: 10px 14px; border-radius: 8px;
-    }
   </style>
 </head>
 <body>
@@ -283,13 +286,17 @@
     </div>
   </div>
 
-  <!-- 日付選択 -->
-  <div class="section">
-    <div class="date-row">
-      <label for="report-date">日付</label>
-      <input type="date" id="report-date" class="date-input">
+  <!-- 日付選択：カード全体がタップ領域 -->
+  <div class="section date-card-section">
+    <div class="date-card-inner">
+      <span class="date-card-icon">📅</span>
+      <div>
+        <div class="date-card-label">日付（タップして変更）</div>
+        <div class="date-card-text" id="date-card-text"></div>
+      </div>
       <span class="existing-badge" id="existing-badge"></span>
     </div>
+    <input type="date" id="report-date">
   </div>
 
   <!-- 報告者 -->
@@ -304,12 +311,6 @@
   <div class="section">
     <div class="section-label">【特記事項】</div>
     <div id="residents-container"></div>
-  </div>
-
-  <!-- 健康状況 -->
-  <div class="section">
-    <div class="section-label">【健康状況】</div>
-    <textarea id="health-status" placeholder="夜〜朝の健康状況、バイタル等を記入..." style="min-height:80px"></textarea>
   </div>
 
   <div class="draft-indicator" id="draft-indicator"></div>
@@ -331,7 +332,6 @@
   </div>
 
   <script>
-    // ─── Constants ────────────────────────────────────────
     const GH_NAMES = [
       'こもれびホーム３−２',
       'こもれびホーム４',
@@ -342,7 +342,6 @@
     ];
     const STORE = 'komorebi_reports';
 
-    // ─── URL params ───────────────────────────────────────
     const params = new URLSearchParams(location.search);
     const ghNum = params.get('gh') || '1';
     const ghName = GH_NAMES[parseInt(ghNum) - 1] || `ホーム${ghNum}`;
@@ -370,9 +369,8 @@
     function getReiwaDate(isoDate) {
       const [y, m, d] = isoDate.split('-').map(Number);
       const dt = new Date(y, m - 1, d);
-      const reiwa = y - 2018;
       const days = ['日','月','火','水','木','金','土'];
-      return `令和${reiwa}年${m}月${d}日（${days[dt.getDay()]}）`;
+      return `令和${y - 2018}年${m}月${d}日（${days[dt.getDay()]}）`;
     }
 
     // ─── Init header ──────────────────────────────────────
@@ -382,26 +380,28 @@
     // ─── Date picker ──────────────────────────────────────
     const dateEl = document.getElementById('report-date');
     dateEl.value = urlDate || todayISO();
-    updateDateHeader();
+    refreshDateDisplay();
     updateExistingBadge();
 
     dateEl.addEventListener('change', () => {
       saveCurrentData();
-      updateDateHeader();
+      refreshDateDisplay();
       updateExistingBadge();
       loadDateData(dateEl.value);
     });
 
-    function updateDateHeader() {
-      document.getElementById('date-display').textContent = getReiwaDate(dateEl.value);
+    function refreshDateDisplay() {
+      const str = getReiwaDate(dateEl.value);
+      document.getElementById('date-display').textContent = str;
+      document.getElementById('date-card-text').textContent = str;
     }
 
     function updateExistingBadge() {
-      const badge = document.getElementById('existing-badge');
-      badge.textContent = loadReport(dateEl.value) ? '記録あり ✓' : '';
+      document.getElementById('existing-badge').textContent =
+        loadReport(dateEl.value) ? '記録あり ✓' : '';
     }
 
-    // ─── Load residents ───────────────────────────────────
+    // ─── Residents ────────────────────────────────────────
     const residents = (JSON.parse(localStorage.getItem('ghResidents') || '{}')[ghNum]) || [];
     const container = document.getElementById('residents-container');
 
@@ -413,7 +413,7 @@
         </div>
       `;
     } else {
-      residents.forEach((name, i) => {
+      residents.forEach(name => {
         const div = document.createElement('div');
         div.className = 'resident-entry';
         div.dataset.name = name;
@@ -425,7 +425,7 @@
       });
     }
 
-    // ─── Auto-expand textareas ────────────────────────────
+    // ─── Auto-expand ──────────────────────────────────────
     function autoExpand(el) {
       el.style.height = 'auto';
       el.style.height = el.scrollHeight + 'px';
@@ -449,18 +449,12 @@
     let saveTimer = null;
     function scheduleAutoSave() {
       clearTimeout(saveTimer);
-      saveTimer = setTimeout(() => {
-        saveCurrentData();
-      }, 800);
+      saveTimer = setTimeout(saveCurrentData, 800);
     }
 
     function saveCurrentData() {
       const dateISO = dateEl.value;
-      const data = {
-        reporter: reporterEl.value.trim(),
-        residents: {},
-        health: document.getElementById('health-status').value
-      };
+      const data = { reporter: reporterEl.value.trim(), residents: {} };
       document.querySelectorAll('.resident-entry').forEach(entry => {
         data.residents[entry.dataset.name] = entry.querySelector('textarea').value;
       });
@@ -480,25 +474,18 @@
           ta.value = (data.residents || {})[entry.dataset.name] || '';
           autoExpand(ta);
         });
-        const hta = document.getElementById('health-status');
-        hta.value = data.health || '';
-        autoExpand(hta);
       } else {
         reporterEl.value = localStorage.getItem('lastReporter') || '';
         document.querySelectorAll('.resident-entry textarea').forEach(ta => {
           ta.value = '';
           ta.style.height = '';
         });
-        const hta = document.getElementById('health-status');
-        hta.value = '';
-        hta.style.height = '';
       }
     }
 
     // ─── Summary Modal ────────────────────────────────────
     function showSummary() {
       const reporter = reporterEl.value || '（未入力）';
-      const health = document.getElementById('health-status').value;
       const dateStr = getReiwaDate(dateEl.value);
 
       let entriesHTML = '';
@@ -533,8 +520,6 @@
         </table>
         <div class="s-sec-title">【特記事項】</div>
         ${entriesHTML || '<p style="color:#999;font-size:13px">（利用者未登録）</p>'}
-        <div class="s-sec-title">【健康状況】</div>
-        <div class="s-health">${health || '（未入力）'}</div>
         <div style="height:20px"></div>
       `;
 
@@ -550,7 +535,6 @@
       saveCurrentData();
       const reporter = reporterEl.value || '';
       const dateStr = getReiwaDate(dateEl.value);
-      const health = document.getElementById('health-status').value;
 
       let entriesHTML = '';
       document.querySelectorAll('.resident-entry').forEach(entry => {
@@ -560,10 +544,6 @@
           .replace(/\n/g,'<br>');
         entriesHTML += `<p style="margin:0 0 10pt;line-height:1.8">・${name}：${text}</p>`;
       });
-
-      const healthEsc = health
-        .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
-        .replace(/\n/g,'<br>');
 
       const wordHTML = `<!DOCTYPE html>
 <html><head><meta charset="UTF-8">
@@ -593,22 +573,19 @@
 </table>
 <p style="font-weight:bold;margin-bottom:8pt">【特記事項】</p>
 ${entriesHTML}
-<br>
-<p style="font-weight:bold;margin-bottom:8pt">【健康状況】</p>
-<p style="line-height:1.8">${healthEsc || '&nbsp;'}</p>
 </body></html>`;
 
       try {
         const blob = htmlDocx.asBlob(wordHTML);
         const dateNum = dateEl.value.replace(/-/g,'');
-        const safeName = ghName.replace(/[^a-zA-Z0-9　-鿿゠-ヿ぀-ゟ]/g,'');
+        const safeName = ghName.replace(/[^　-鿿＀-￯゠-ヿa-zA-Z0-9]/g,'');
         saveAs(blob, `${safeName}_業務日報_${dateNum}.docx`);
       } catch(e) {
         alert('Word出力に失敗しました。\n' + e);
       }
     }
 
-    // ─── Init: load data for initial date ─────────────────
+    // ─── Init ─────────────────────────────────────────────
     loadDateData(dateEl.value);
   </script>
 </body>
