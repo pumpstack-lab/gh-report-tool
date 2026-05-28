@@ -377,10 +377,14 @@
         </table>
         <div class="d-sec-title">【特記事項】</div>
         ${entriesHTML || '<p style="color:#999;font-size:13px">（記録なし）</p>'}
-        ${report.shortage ? `
+        ${Array.isArray(report.shortage) && report.shortage.length > 0 ? `
           <div class="d-sec-title" style="color:#f39c12">【不足品】</div>
-          <div style="font-size:13px;line-height:1.8;white-space:pre-wrap;padding:10px 14px;background:#fff8f0;border-radius:8px;${report.shortage_checked ? 'text-decoration:line-through;color:#aaa' : 'color:#7a5a00'}">
-            ${report.shortage}${report.shortage_checked ? '　✓ 対応済み' : ''}
+          <div style="padding:10px 14px;background:#fff8f0;border-radius:8px;">
+            ${report.shortage.map(item => `
+              <div style="font-size:13px;padding:3px 0;${item.checked ? 'text-decoration:line-through;color:#aaa' : 'color:#7a5a00'}">
+                ${item.checked ? '☑' : '☐'} ${item.text}
+              </div>
+            `).join('')}
           </div>
         ` : ''}
         <div style="height:20px"></div>
