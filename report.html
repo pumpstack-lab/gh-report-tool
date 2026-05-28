@@ -4,6 +4,8 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>業務日報 入力</title>
+  <script src="config.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
   <script src="https://unpkg.com/html-docx-js@0.3.1/dist/html-docx.js"></script>
   <style>
@@ -47,7 +49,6 @@
       border-bottom: 2px solid #eef2f7;
     }
 
-    /* DATE CARD — entire area is clickable via showPicker() */
     .date-card-section {
       cursor: pointer;
       user-select: none;
@@ -73,7 +74,6 @@
       white-space: nowrap;
       flex-shrink: 0;
     }
-    /* Input hidden — opened programmatically via showPicker() */
     #report-date {
       position: absolute;
       opacity: 0;
@@ -83,7 +83,6 @@
       pointer-events: none;
     }
 
-    /* REPORTER */
     .reporter-row {
       display: flex;
       align-items: center;
@@ -110,7 +109,6 @@
       box-shadow: 0 0 0 3px rgba(74,144,217,0.15);
     }
 
-    /* RESIDENT ENTRIES */
     .resident-entry {
       margin-bottom: 20px;
       padding-bottom: 20px;
@@ -162,7 +160,6 @@
       font-weight: bold;
     }
 
-    /* BOTTOM BAR */
     .bottom-bar {
       position: fixed;
       bottom: 0; left: 0; right: 0;
@@ -208,7 +205,6 @@
       height: 20px;
     }
 
-    /* MODAL */
     .modal-overlay {
       position: fixed;
       inset: 0;
@@ -264,7 +260,6 @@
       -webkit-overflow-scrolling: touch;
     }
 
-    /* SUMMARY */
     .s-table { width: 100%; border-collapse: collapse; font-size: 13px; margin-bottom: 18px; }
     .s-table td { border: 1.5px solid #333; padding: 8px 10px; vertical-align: middle; }
     .s-gh-name { text-align: center; font-size: 17px; font-weight: bold; }
@@ -297,7 +292,6 @@
     </div>
   </div>
 
-  <!-- 日付選択：カード全体がクリック領域 -->
   <div class="section date-card-section" id="date-card-section">
     <div class="date-card-inner">
       <span class="date-card-icon">📅</span>
@@ -310,7 +304,6 @@
     <input type="date" id="report-date">
   </div>
 
-  <!-- 報告者 -->
   <div class="section">
     <div class="reporter-row">
       <label for="reporter">報告者</label>
@@ -318,7 +311,6 @@
     </div>
   </div>
 
-  <!-- 特記事項 -->
   <div class="section">
     <div class="section-label">【特記事項】</div>
     <div id="residents-container"></div>
@@ -331,7 +323,6 @@
     <button class="btn-word" onclick="exportWord()">📄 Word出力</button>
   </div>
 
-  <!-- Summary Modal -->
   <div id="modal" class="modal-overlay" style="display:none" onclick="if(event.target===this)closeModal()">
     <div class="modal-box">
       <div class="modal-head">
@@ -352,28 +343,15 @@
       'こもれびホーム６',
       'こもれびホームマハロ'
     ];
-    const STORE = 'komorebi_reports';
+
+    const { createClient } = supabase;
+    const db = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
     const params = new URLSearchParams(location.search);
     const ghNum = params.get('gh') || '1';
     const ghName = GH_NAMES[parseInt(ghNum) - 1] || `ホーム${ghNum}`;
     const urlDate = params.get('date');
 
-    // ─── Storage ──────────────────────────────────────────
-    function getAllData() {
-      return JSON.parse(localStorage.getItem(STORE) || '{}');
-    }
-    function loadReport(dateISO) {
-      return (getAllData()[ghNum] || {})[dateISO] || null;
-    }
-    function saveReport(dateISO, data) {
-      const all = getAllData();
-      if (!all[ghNum]) all[ghNum] = {};
-      all[ghNum][dateISO] = { ...data, savedAt: new Date().toISOString() };
-      localStorage.setItem(STORE, JSON.stringify(all));
-    }
-
-    // ─── Date helpers ─────────────────────────────────────
     function todayISO() {
       const t = new Date();
       return `${t.getFullYear()}-${String(t.getMonth()+1).padStart(2,'0')}-${String(t.getDate()).padStart(2,'0')}`;
@@ -385,17 +363,13 @@
       return `令和${y - 2018}年${m}月${d}日（${days[dt.getDay()]}）`;
     }
 
-    // ─── Init header ──────────────────────────────────────
     document.getElementById('gh-title').textContent = ghName;
     document.title = `${ghName} 業務日報`;
 
-    // ─── Date picker ──────────────────────────────────────
     const dateEl = document.getElementById('report-date');
     dateEl.value = urlDate || todayISO();
     refreshDateDisplay();
-    updateExistingBadge();
 
-    // Card click → open native date picker
     document.getElementById('date-card-section').addEventListener('click', () => {
       try {
         if (typeof dateEl.showPicker === 'function') dateEl.showPicker();
@@ -403,22 +377,16 @@
       } catch(e) { dateEl.focus(); }
     });
 
-    dateEl.addEventListener('change', () => {
-      saveCurrentData();
+    dateEl.addEventListener('change', async () => {
+      await saveCurrentData();
       refreshDateDisplay();
-      updateExistingBadge();
-      loadDateData(dateEl.value);
+      await loadDateData(dateEl.value);
     });
 
     function refreshDateDisplay() {
       const str = getReiwaDate(dateEl.value);
       document.getElementById('date-display').textContent = str;
       document.getElementById('date-card-text').textContent = str;
-    }
-
-    function updateExistingBadge() {
-      document.getElementById('existing-badge').textContent =
-        loadReport(dateEl.value) ? '記録あり ✓' : '';
     }
 
     // ─── Residents ────────────────────────────────────────
@@ -445,7 +413,6 @@
       });
     }
 
-    // ─── Auto-expand ──────────────────────────────────────
     function autoExpand(el) {
       el.style.height = 'auto';
       el.style.height = el.scrollHeight + 'px';
@@ -457,7 +424,7 @@
       });
     });
 
-    // ─── Reporter ─────────────────────────────────────────
+    // ─── Reporter (name cached in localStorage for convenience) ───
     const reporterEl = document.getElementById('reporter');
     reporterEl.value = localStorage.getItem('lastReporter') || '';
     reporterEl.addEventListener('input', () => {
@@ -472,21 +439,48 @@
       saveTimer = setTimeout(saveCurrentData, 800);
     }
 
-    function saveCurrentData() {
+    async function saveCurrentData() {
       const dateISO = dateEl.value;
-      const data = { reporter: reporterEl.value.trim(), residents: {} };
+      const reporter = reporterEl.value.trim();
+      const residentsData = {};
+      let hasContent = !!reporter;
       document.querySelectorAll('.resident-entry').forEach(entry => {
-        data.residents[entry.dataset.name] = entry.querySelector('textarea').value;
+        const val = entry.querySelector('textarea').value;
+        residentsData[entry.dataset.name] = val;
+        if (val.trim()) hasContent = true;
       });
-      saveReport(dateISO, data);
-      updateExistingBadge();
+
+      if (!hasContent) return;
+
+      const { error } = await db.from('reports').upsert({
+        gh_num: parseInt(ghNum),
+        gh_name: ghName,
+        report_date: dateISO,
+        reporter: reporter,
+        residents: residentsData,
+        updated_at: new Date().toISOString()
+      }, { onConflict: 'gh_num,report_date' });
+
       const ind = document.getElementById('draft-indicator');
-      ind.textContent = '保存しました ✓';
-      setTimeout(() => ind.textContent = '', 2000);
+      if (error) {
+        ind.style.color = '#e74c3c';
+        ind.textContent = '⚠️ 保存失敗: ' + error.message;
+      } else {
+        ind.style.color = '';
+        ind.textContent = '保存しました ✓';
+        document.getElementById('existing-badge').textContent = '記録あり ✓';
+      }
+      setTimeout(() => ind.textContent = '', 3000);
     }
 
-    function loadDateData(dateISO) {
-      const data = loadReport(dateISO);
+    async function loadDateData(dateISO) {
+      const { data } = await db.from('reports').select('*')
+        .eq('gh_num', parseInt(ghNum))
+        .eq('report_date', dateISO)
+        .maybeSingle();
+
+      document.getElementById('existing-badge').textContent = data ? '記録あり ✓' : '';
+
       if (data) {
         reporterEl.value = data.reporter || '';
         document.querySelectorAll('.resident-entry').forEach(entry => {
@@ -550,37 +544,17 @@
       document.getElementById('modal').style.display = 'none';
     }
 
-    // ─── Share URL ────────────────────────────────────────
+    // ─── Share URL (clean query params, data loaded from Supabase) ───
     function shareURL() {
-      saveCurrentData();
-      const payload = {
-        gh: ghNum,
-        ghName: ghName,
-        date: dateEl.value,
-        reporter: reporterEl.value,
-        residents: {},
-        sharedAt: new Date().toISOString()
-      };
-      document.querySelectorAll('.resident-entry').forEach(entry => {
-        payload.residents[entry.dataset.name] = entry.querySelector('textarea').value;
-      });
-
-      const json = JSON.stringify(payload);
-      const encoded = btoa(unescape(encodeURIComponent(json)));
-      const base = location.href.replace('report.html', 'summary.html').split('?')[0].split('#')[0];
-      const url = `${base}#${encoded}`;
-
+      const base = location.href.split('report.html')[0];
+      const url = `${base}summary.html?gh=${ghNum}&date=${dateEl.value}`;
       if (navigator.clipboard && navigator.clipboard.writeText) {
         navigator.clipboard.writeText(url).then(() => {
-          alert('URLをコピーしました！\nLINEなどに貼り付けて管理者に送ってください。');
-        }).catch(() => showURLPrompt(url));
+          alert('URLをコピーしました！\n管理者へ送信してください。\n（admin.htmlでもリアルタイム確認できます）');
+        }).catch(() => prompt('以下のURLをコピーして送信してください：', url));
       } else {
-        showURLPrompt(url);
+        prompt('以下のURLをコピーして送信してください：', url);
       }
-    }
-
-    function showURLPrompt(url) {
-      prompt('以下のURLをコピーして送信してください：', url);
     }
 
     // ─── Word Export ──────────────────────────────────────
