@@ -4,6 +4,8 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>過去記録 - こもれびホーム</title>
+  <script src="config.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
@@ -28,7 +30,6 @@
     .page-header a { color: white; text-decoration: none; font-size: 26px; }
     .page-header h1 { font-size: 18px; font-weight: bold; }
 
-    /* GH TABS */
     .tabs-wrap {
       background: white;
       border-bottom: 1px solid #dde;
@@ -63,7 +64,6 @@
       border-bottom-color: #4a90d9;
     }
 
-    /* CONTENT */
     .content { padding: 16px; max-width: 680px; margin: 0 auto; }
 
     .empty-state {
@@ -84,7 +84,13 @@
       font-weight: bold;
     }
 
-    /* REPORT CARDS */
+    .loading-state {
+      text-align: center;
+      padding: 60px 20px;
+      color: #aaa;
+      font-size: 15px;
+    }
+
     .report-card {
       background: white;
       border-radius: 12px;
@@ -134,7 +140,6 @@
       overflow: hidden;
     }
 
-    /* MODAL */
     .modal-overlay {
       position: fixed;
       inset: 0;
@@ -192,7 +197,6 @@
       -webkit-overflow-scrolling: touch;
     }
 
-    /* DETAIL VIEW */
     .d-table { width: 100%; border-collapse: collapse; font-size: 13px; margin-bottom: 18px; }
     .d-table td { border: 1.5px solid #333; padding: 8px 10px; vertical-align: middle; }
     .d-gh-name { text-align: center; font-size: 16px; font-weight: bold; }
@@ -213,10 +217,6 @@
       font-size: 13px; line-height: 1.8; white-space: pre-wrap;
       background: #f9f9f9; padding: 10px 14px; border-radius: 8px;
     }
-    .d-health {
-      font-size: 13px; line-height: 1.8; white-space: pre-wrap;
-      background: #f9f9f9; padding: 10px 14px; border-radius: 8px;
-    }
   </style>
 </head>
 <body>
@@ -226,15 +226,12 @@
     <h1>📋 過去記録</h1>
   </div>
 
-  <!-- GH Tabs -->
   <div class="tabs-wrap">
     <div class="tabs" id="tabs"></div>
   </div>
 
-  <!-- Content -->
   <div class="content" id="content"></div>
 
-  <!-- Detail Modal -->
   <div id="modal" class="modal-overlay" style="display:none" onclick="if(event.target===this)closeModal()">
     <div class="modal-box">
       <div class="modal-head">
@@ -257,11 +254,9 @@
       'こもれびホーム６',
       'こもれびホームマハロ'
     ];
-    const STORE = 'komorebi_reports';
 
-    function getAllData() {
-      return JSON.parse(localStorage.getItem(STORE) || '{}');
-    }
+    const { createClient } = supabase;
+    const db = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
     function getReiwaDate(isoDate) {
       const [y, m, d] = isoDate.split('-').map(Number);
@@ -271,10 +266,8 @@
       return `令和${reiwa}年${m}月${d}日（${days[dt.getDay()]}）`;
     }
 
-    // ─── State ────────────────────────────────────────────
     let currentGH = '1';
 
-    // ─── Tabs ─────────────────────────────────────────────
     const tabsEl = document.getElementById('tabs');
     GH_NAMES.forEach((name, i) => {
       const ghNum = String(i + 1);
@@ -290,17 +283,24 @@
       currentGH = ghNum;
       document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
       document.getElementById(`tab-${ghNum}`).classList.add('active');
-      renderList(ghNum);
+      loadList(ghNum);
     }
 
-    // ─── List ─────────────────────────────────────────────
-    function renderList(ghNum) {
+    async function loadList(ghNum) {
       const content = document.getElementById('content');
-      const all = getAllData();
-      const ghData = all[ghNum] || {};
-      const dates = Object.keys(ghData).sort().reverse();
+      content.innerHTML = '<div class="loading-state">読み込み中...</div>';
 
-      if (dates.length === 0) {
+      const { data, error } = await db.from('reports').select('*')
+        .eq('gh_num', parseInt(ghNum))
+        .order('report_date', { ascending: false })
+        .limit(60);
+
+      if (error) {
+        content.innerHTML = `<div class="empty-state"><div class="icon">⚠️</div><p>読み込みに失敗しました<br>${error.message}</p></div>`;
+        return;
+      }
+
+      if (!data || data.length === 0) {
         content.innerHTML = `
           <div class="empty-state">
             <div class="icon">📭</div>
@@ -312,12 +312,14 @@
       }
 
       content.innerHTML = '';
-      dates.forEach(dateISO => {
-        const report = ghData[dateISO];
+      data.forEach(report => {
+        const dateISO = report.report_date;
         const residents = Object.entries(report.residents || {});
         const filledCount = residents.filter(([, v]) => v && v.trim()).length;
         const firstEntry = residents.find(([, v]) => v && v.trim());
-        const preview = firstEntry ? `・${firstEntry[0]}：${firstEntry[1].slice(0,60)}...` : '（記録なし）';
+        const preview = firstEntry
+          ? `・${firstEntry[0]}：${firstEntry[1].slice(0, 60)}...`
+          : '（記録なし）';
 
         const card = document.createElement('div');
         card.className = 'report-card';
@@ -336,12 +338,10 @@
       });
     }
 
-    // ─── Detail Modal ─────────────────────────────────────
     function showDetail(ghNum, dateISO, report) {
       const ghName = GH_NAMES[parseInt(ghNum) - 1];
       const dateStr = getReiwaDate(dateISO);
       const reporter = report.reporter || '（未記入）';
-      const health = report.health || '';
       const residents = report.residents || {};
 
       document.getElementById('modal-title').textContent = `${ghName} ${dateStr}`;
@@ -377,8 +377,6 @@
         </table>
         <div class="d-sec-title">【特記事項】</div>
         ${entriesHTML || '<p style="color:#999;font-size:13px">（記録なし）</p>'}
-        <div class="d-sec-title">【健康状況】</div>
-        <div class="d-health">${health || '（未入力）'}</div>
         <div style="height:20px"></div>
       `;
 
@@ -389,8 +387,7 @@
       document.getElementById('modal').style.display = 'none';
     }
 
-    // ─── Init ─────────────────────────────────────────────
-    renderList('1');
+    loadList('1');
   </script>
 </body>
 </html>
