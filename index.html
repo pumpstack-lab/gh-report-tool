@@ -4,6 +4,8 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>こもれびホーム 業務日報</title>
+  <script src="config.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
@@ -228,17 +230,23 @@
       updateGHLinks(selectedDate);
     });
 
-    // Show today's record count badge per GH
+    // Show today's record badge per GH (from Supabase)
     const todayStr = todayISO();
-    const allData = JSON.parse(localStorage.getItem('komorebi_reports') || '{}');
-    for (let i = 1; i <= 6; i++) {
-      const todayReport = (allData[i] || {})[todayStr];
-      const badge = document.getElementById(`badge${i}`);
-      if (todayReport) {
-        badge.textContent = '本日記録あり ✓';
-        badge.style.color = '#2ecc71';
-      }
-    }
+    const { createClient } = supabase;
+    const db = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+    db.from('reports')
+      .select('gh_num')
+      .eq('report_date', todayStr)
+      .then(({ data }) => {
+        if (!data) return;
+        data.forEach(r => {
+          const badge = document.getElementById(`badge${r.gh_num}`);
+          if (badge) {
+            badge.textContent = '本日記録あり ✓';
+            badge.style.color = '#2ecc71';
+          }
+        });
+      });
   </script>
 </body>
 </html>
