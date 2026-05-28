@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>利用者設定 - GH業務日報</title>
+  <title>利用者設定 - こもれびホーム</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
@@ -24,12 +24,7 @@
       z-index: 100;
       box-shadow: 0 2px 8px rgba(0,0,0,0.15);
     }
-    .page-header a {
-      color: white;
-      text-decoration: none;
-      font-size: 26px;
-      line-height: 1;
-    }
+    .page-header a { color: white; text-decoration: none; font-size: 26px; line-height: 1; }
     .page-header h1 { font-size: 18px; font-weight: bold; }
 
     .content { padding: 16px; max-width: 680px; margin: 0 auto; }
@@ -51,12 +46,12 @@
       justify-content: space-between;
       cursor: pointer;
       font-family: inherit;
-      font-size: 16px;
+      font-size: 15px;
       font-weight: bold;
       color: #1a2a3a;
       text-align: left;
     }
-    .gh-toggle .arrow { transition: transform 0.2s; font-style: normal; }
+    .gh-toggle .arrow { transition: transform 0.2s; }
     .gh-toggle.open .arrow { transform: rotate(180deg); }
 
     .gh-body { display: none; padding: 16px; }
@@ -86,8 +81,7 @@
     }
     .btn-del {
       flex-shrink: 0;
-      width: 40px;
-      height: 40px;
+      width: 40px; height: 40px;
       background: #ffecec;
       color: #e74c3c;
       border: none;
@@ -121,7 +115,7 @@
       color: white;
       border-radius: 12px;
       padding: 2px 10px;
-      font-size: 13px;
+      font-size: 12px;
       font-weight: bold;
       min-width: 32px;
       text-align: center;
@@ -129,9 +123,7 @@
 
     .save-footer {
       position: fixed;
-      bottom: 0;
-      left: 0;
-      right: 0;
+      bottom: 0; left: 0; right: 0;
       background: white;
       padding: 12px 16px 28px;
       box-shadow: 0 -2px 8px rgba(0,0,0,0.1);
@@ -174,6 +166,14 @@
   </div>
 
   <script>
+    const GH_NAMES = [
+      'こもれびホーム３−２',
+      'こもれびホーム４',
+      'こもれびホーム５−１',
+      'こもれびホーム５−２',
+      'こもれびホーム６',
+      'こもれびホームマハロ'
+    ];
     const GH_COUNT = 6;
 
     function loadSettings() {
@@ -183,8 +183,7 @@
     function updateCount(num) {
       const ul = document.getElementById(`list-${num}`);
       const count = ul.querySelectorAll('input').length;
-      const badge = document.getElementById(`badge-${num}`);
-      badge.textContent = count + '名';
+      document.getElementById(`badge-${num}`).textContent = count + '名';
     }
 
     function addRow(num, value = '') {
@@ -192,7 +191,8 @@
       const li = document.createElement('li');
       li.innerHTML = `
         <div class="resident-row">
-          <input type="text" placeholder="利用者名（例：浅山さん）" value="${value.replace(/"/g,'&quot;')}"
+          <input type="text" placeholder="利用者名（例：浅山さん）"
+            value="${value.replace(/"/g,'&quot;')}"
             oninput="updateCount(${num})">
           <button class="btn-del" onclick="this.closest('li').remove();updateCount(${num})">−</button>
         </div>
@@ -207,15 +207,16 @@
       document.getElementById(`body-${num}`).classList.toggle('open');
     }
 
-    function buildGHCard(num, residents) {
+    function buildGHCard(num) {
+      const name = GH_NAMES[num - 1];
       const div = document.createElement('div');
       div.className = 'gh-card';
       div.innerHTML = `
         <button class="gh-toggle" id="toggle-${num}" onclick="toggleCard(${num})">
-          <span>🏡 グループホーム ${num}</span>
+          <span>🏡 ${name}</span>
           <div style="display:flex;align-items:center;gap:8px">
             <span class="count-badge" id="badge-${num}">0名</span>
-            <i class="arrow">▼</i>
+            <span class="arrow">▼</span>
           </div>
         </button>
         <div class="gh-body" id="body-${num}">
@@ -244,10 +245,9 @@
     const settings = loadSettings();
     const content = document.getElementById('content');
     for (let i = 1; i <= GH_COUNT; i++) {
-      content.appendChild(buildGHCard(i, settings[i] || []));
+      content.appendChild(buildGHCard(i));
       (settings[i] || []).forEach(name => addRow(i, name));
     }
-    // Open GH1 by default
     toggleCard(1);
   </script>
 </body>
