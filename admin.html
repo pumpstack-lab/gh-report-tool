@@ -134,31 +134,34 @@
     }
     .card-link:hover { text-decoration: underline; }
 
-    .shortage-row {
-      display: flex;
-      align-items: flex-start;
-      gap: 8px;
-      margin-top: 6px;
+    .shortage-section {
+      margin-top: 8px;
       padding: 8px 10px;
       background: #fff8f0;
       border: 1px solid #f39c12;
       border-radius: 8px;
+    }
+    .shortage-header {
+      font-size: 11px;
+      font-weight: bold;
+      color: #f39c12;
+      margin-bottom: 6px;
+    }
+    .shortage-item {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      padding: 3px 0;
       font-size: 12px;
       color: #7a5a00;
     }
-    .shortage-row.checked {
-      background: #f5f5f5;
-      border-color: #ccc;
-      color: #aaa;
-    }
-    .shortage-row.checked .shortage-text { text-decoration: line-through; }
-    .shortage-label { font-weight: bold; white-space: nowrap; }
-    .shortage-text { flex: 1; line-height: 1.5; }
+    .shortage-item.checked { color: #aaa; }
+    .shortage-item.checked .shortage-item-text { text-decoration: line-through; }
+    .shortage-item-text { flex: 1; line-height: 1.4; }
     .shortage-checkbox {
-      width: 18px; height: 18px;
+      width: 16px; height: 16px;
       cursor: pointer;
       flex-shrink: 0;
-      margin-top: 1px;
       accent-color: #2ecc71;
     }
 
@@ -454,8 +457,7 @@
         : '';
       const residents = report?.residents || {};
       const residentCount = Object.values(residents).filter(v => v?.trim()).length;
-      const shortage = report?.shortage || '';
-      const shortageChecked = report?.shortage_checked || false;
+      const shortage = Array.isArray(report?.shortage) ? report.shortage : [];
 
       const div = document.createElement('div');
       div.className = `gh-card ${hasReport ? 'has-report' : ''}`;
@@ -470,27 +472,38 @@
         ${updatedAt ? `<div class="card-time">更新: ${updatedAt}</div>` : ''}
       `;
 
-      if (shortage) {
-        const shortageRow = document.createElement('div');
-        shortageRow.className = `shortage-row${shortageChecked ? ' checked' : ''}`;
-        shortageRow.id = `shortage-row-${ghNum}`;
-        shortageRow.innerHTML = `
-          <span class="shortage-label">不足品</span>
-          <span class="shortage-text">${shortage}</span>
-          <input type="checkbox" class="shortage-checkbox" id="sc-${ghNum}"
-            ${shortageChecked ? 'checked' : ''}
-            title="${shortageChecked ? '対応済み' : '未対応'}">
-        `;
-        shortageRow.querySelector('input').addEventListener('change', async (e) => {
-          e.stopPropagation();
-          const checked = e.target.checked;
-          await db.from('reports')
-            .update({ shortage_checked: checked })
-            .eq('gh_num', ghNum)
-            .eq('report_date', dateISO);
-          shortageRow.className = `shortage-row${checked ? ' checked' : ''}`;
+      if (shortage.length > 0) {
+        const shortageWrap = document.createElement('div');
+        shortageWrap.className = 'shortage-section';
+        shortageWrap.innerHTML = '<div class="shortage-header">不足品</div>';
+        shortage.forEach((item, idx) => {
+          const itemDiv = document.createElement('div');
+          itemDiv.className = `shortage-item${item.checked ? ' checked' : ''}`;
+          const cb = document.createElement('input');
+          cb.type = 'checkbox';
+          cb.className = 'shortage-checkbox';
+          cb.checked = !!item.checked;
+          cb.addEventListener('change', async (e) => {
+            e.stopPropagation();
+            const newChecked = e.target.checked;
+            const updated = shortage.map((s, i) =>
+              i === idx ? { ...s, checked: newChecked } : s
+            );
+            await db.from('reports')
+              .update({ shortage: updated })
+              .eq('gh_num', ghNum)
+              .eq('report_date', dateISO);
+            itemDiv.className = `shortage-item${newChecked ? ' checked' : ''}`;
+            shortage[idx] = { ...shortage[idx], checked: newChecked };
+          });
+          const label = document.createElement('span');
+          label.className = 'shortage-item-text';
+          label.textContent = item.text;
+          itemDiv.appendChild(cb);
+          itemDiv.appendChild(label);
+          shortageWrap.appendChild(itemDiv);
         });
-        div.appendChild(shortageRow);
+        div.appendChild(shortageWrap);
       }
 
       if (hasReport) {
@@ -531,15 +544,14 @@
         });
       }
 
-      const shortage = report.shortage || '';
-      if (shortage) {
-        const checked = report.shortage_checked;
-        html += `
-          <div style="margin-top:16px;font-weight:bold;font-size:13px;color:#f39c12">【不足品】</div>
-          <div style="font-size:13px;margin-top:6px;${checked ? 'text-decoration:line-through;color:#aaa' : 'color:#7a5a00'}">
-            ${shortage}${checked ? '　✓ 対応済み' : ''}
-          </div>
-        `;
+      const shortageArr = Array.isArray(report.shortage) ? report.shortage : [];
+      if (shortageArr.length > 0) {
+        html += `<div style="margin-top:16px;font-weight:bold;font-size:13px;color:#f39c12">【不足品】</div>`;
+        shortageArr.forEach(item => {
+          html += `<div style="font-size:13px;padding:4px 0;${item.checked ? 'text-decoration:line-through;color:#aaa' : 'color:#7a5a00'}">
+            ${item.checked ? '☑' : '☐'} ${item.text}
+          </div>`;
+        });
       }
 
       document.getElementById('modal-body').innerHTML = html;
