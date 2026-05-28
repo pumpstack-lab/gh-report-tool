@@ -27,6 +27,11 @@
       margin-bottom: 8px;
       font-weight: bold;
     }
+    .date-wrap {
+      position: relative;
+      display: inline-block;
+      margin-top: 6px;
+    }
     .header .date {
       font-size: 15px;
       color: #5a6a7a;
@@ -34,7 +39,22 @@
       display: inline-block;
       padding: 6px 20px;
       border-radius: 20px;
-      margin-top: 6px;
+      cursor: pointer;
+      user-select: none;
+    }
+    .header .date:active { background: #e8f0fe; }
+    .date-hint {
+      font-size: 11px;
+      color: #aab;
+      margin-top: 4px;
+    }
+    #index-date {
+      position: absolute;
+      opacity: 0;
+      width: 1px;
+      height: 1px;
+      border: 0;
+      pointer-events: none;
     }
     .label {
       width: 100%;
@@ -122,7 +142,11 @@
 <body>
   <div class="header">
     <h1>🏠 こもれびホーム 業務日報</h1>
-    <span class="date" id="today"></span>
+    <div class="date-wrap" id="date-wrap">
+      <span class="date" id="today"></span>
+      <div class="date-hint">クリックで日付変更</div>
+      <input type="date" id="index-date">
+    </div>
   </div>
 
   <p class="label">報告するホームを選択してください</p>
@@ -168,10 +192,41 @@
   <footer>こもれびホーム 業務日報システム v0.3</footer>
 
   <script>
-    const now = new Date();
-    const days = ['日','月','火','水','木','金','土'];
-    document.getElementById('today').textContent =
-      `${now.getFullYear()}年${now.getMonth()+1}月${now.getDate()}日（${days[now.getDay()]}）`;
+    function todayISO() {
+      const t = new Date();
+      return `${t.getFullYear()}-${String(t.getMonth()+1).padStart(2,'0')}-${String(t.getDate()).padStart(2,'0')}`;
+    }
+    function formatDate(iso) {
+      const [y, m, d] = iso.split('-').map(Number);
+      const dt = new Date(y, m - 1, d);
+      const days = ['日','月','火','水','木','金','土'];
+      return `${y}年${m}月${d}日（${days[dt.getDay()]}）`;
+    }
+    function updateGHLinks(dateISO) {
+      for (let i = 1; i <= 6; i++) {
+        const btn = document.getElementById(`btn${i}`);
+        if (btn) btn.href = `report.html?gh=${i}&date=${dateISO}`;
+      }
+    }
+
+    const indexDateEl = document.getElementById('index-date');
+    let selectedDate = todayISO();
+    indexDateEl.value = selectedDate;
+    document.getElementById('today').textContent = formatDate(selectedDate);
+    updateGHLinks(selectedDate);
+
+    document.getElementById('date-wrap').addEventListener('click', () => {
+      try {
+        if (typeof indexDateEl.showPicker === 'function') indexDateEl.showPicker();
+        else indexDateEl.focus();
+      } catch(e) { indexDateEl.focus(); }
+    });
+
+    indexDateEl.addEventListener('change', () => {
+      selectedDate = indexDateEl.value;
+      document.getElementById('today').textContent = formatDate(selectedDate);
+      updateGHLinks(selectedDate);
+    });
 
     // Show today's record count badge per GH
     const todayISO = now.toISOString().slice(0,10);
