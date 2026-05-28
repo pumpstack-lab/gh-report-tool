@@ -195,9 +195,72 @@
       font-size: 14px;
       color: #c0392b;
     }
+
+    /* PASSWORD GATE */
+    .pw-gate {
+      position: fixed;
+      inset: 0;
+      background: #2c3e50;
+      z-index: 9999;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .pw-box {
+      background: white;
+      border-radius: 16px;
+      padding: 36px 32px;
+      width: 320px;
+      text-align: center;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.3);
+    }
+    .pw-box h2 { font-size: 18px; color: #1a2a3a; margin-bottom: 6px; }
+    .pw-box p { font-size: 13px; color: #7a8a9a; margin-bottom: 20px; }
+    .pw-input {
+      width: 100%;
+      padding: 12px 16px;
+      border: 1.5px solid #d0d8e8;
+      border-radius: 10px;
+      font-size: 16px;
+      font-family: inherit;
+      text-align: center;
+      letter-spacing: 2px;
+      margin-bottom: 14px;
+    }
+    .pw-input:focus { outline: none; border-color: #4a90d9; }
+    .pw-btn {
+      width: 100%;
+      padding: 13px;
+      background: #2c3e50;
+      color: white;
+      border: none;
+      border-radius: 10px;
+      font-size: 15px;
+      font-weight: bold;
+      cursor: pointer;
+      font-family: inherit;
+    }
+    .pw-btn:active { background: #1a2a3a; }
+    .pw-error {
+      font-size: 13px;
+      color: #e74c3c;
+      margin-top: 10px;
+      min-height: 18px;
+    }
   </style>
 </head>
 <body>
+
+  <!-- Password Gate -->
+  <div id="pw-gate" class="pw-gate">
+    <div class="pw-box">
+      <h2>🏠 管理者ダッシュボード</h2>
+      <p>パスワードを入力してください</p>
+      <input type="password" id="pw-input" class="pw-input" placeholder="••••••••" maxlength="32">
+      <button class="pw-btn" onclick="checkPassword()">ログイン</button>
+      <div class="pw-error" id="pw-error"></div>
+    </div>
+  </div>
 
   <div class="page-header">
     <div class="header-top">
@@ -240,6 +303,42 @@
   </div>
 
   <script>
+    // ─── Password Gate ────────────────────────────────────
+    function checkPassword() {
+      const val = document.getElementById('pw-input').value;
+      if (val === ADMIN_PASSWORD) {
+        sessionStorage.setItem('admin_auth', '1');
+        document.getElementById('pw-gate').style.display = 'none';
+        initDashboard();
+      } else {
+        document.getElementById('pw-error').textContent = 'パスワードが違います';
+        document.getElementById('pw-input').value = '';
+        document.getElementById('pw-input').focus();
+      }
+    }
+    document.getElementById('pw-input').addEventListener('keydown', e => {
+      if (e.key === 'Enter') checkPassword();
+    });
+    if (sessionStorage.getItem('admin_auth') === '1') {
+      document.getElementById('pw-gate').style.display = 'none';
+      initDashboard();
+    }
+
+    function initDashboard() {
+      renderGrid([], selectedDate);
+      loadAllHomes(selectedDate);
+      channel.subscribe((status) => {
+        const badge = document.getElementById('rt-badge');
+        if (status === 'SUBSCRIBED') {
+          badge.textContent = '🟢 リアルタイム';
+          badge.classList.remove('offline');
+        } else {
+          badge.textContent = '⚠️ 再接続中';
+          badge.classList.add('offline');
+        }
+      });
+    }
+
     const GH_NAMES = [
       'こもれびホーム３−２',
       'こもれびホーム４',
@@ -391,28 +490,13 @@
     const channel = db.channel('admin-realtime')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'reports' },
         () => loadAllHomes(selectedDate)
-      )
-      .subscribe((status) => {
-        const badge = document.getElementById('rt-badge');
-        if (status === 'SUBSCRIBED') {
-          badge.textContent = '🟢 リアルタイム';
-          badge.classList.remove('offline');
-        } else {
-          badge.textContent = '⚠️ 再接続中';
-          badge.classList.add('offline');
-        }
-      });
+      );
 
     // ─── Error ────────────────────────────────────────────
     function showError(msg) {
       document.getElementById('error-area').innerHTML =
         `<div class="error-msg">⚠️ ${msg}</div>`;
     }
-
-    // ─── Init ─────────────────────────────────────────────
-    // Render placeholder cards immediately
-    renderGrid([], selectedDate);
-    loadAllHomes(selectedDate);
   </script>
 </body>
 </html>
