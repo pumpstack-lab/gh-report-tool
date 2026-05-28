@@ -4,6 +4,8 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>報告書 - こもれびホーム</title>
+  <script src="config.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
@@ -28,7 +30,6 @@
 
     .content { max-width: 720px; margin: 0 auto; padding: 16px; }
 
-    /* REPORT HEADER TABLE */
     .report-table {
       width: 100%;
       border-collapse: collapse;
@@ -62,7 +63,6 @@
       color: #1a2a3a;
     }
 
-    /* SECTION */
     .section-card {
       background: white;
       border-radius: 12px;
@@ -79,7 +79,6 @@
       border-bottom: 2px solid #eef2f7;
     }
 
-    /* RESIDENT */
     .resident-block { margin-bottom: 18px; padding-bottom: 18px; border-bottom: 1px solid #f0f2f5; }
     .resident-block:last-child { border-bottom: none; margin-bottom: 0; padding-bottom: 0; }
     .resident-name {
@@ -102,7 +101,6 @@
       border-radius: 8px;
     }
 
-    /* ERROR / EMPTY */
     .error-state {
       text-align: center;
       padding: 60px 20px;
@@ -110,7 +108,6 @@
     }
     .error-state .icon { font-size: 48px; margin-bottom: 12px; }
 
-    /* TIMESTAMP */
     .timestamp {
       text-align: right;
       font-size: 11px;
@@ -144,6 +141,18 @@
   </div>
 
   <script>
+    const GH_NAMES = [
+      'こもれびホーム３−２',
+      'こもれびホーム４',
+      'こもれびホーム５−１',
+      'こもれびホーム５−２',
+      'こもれびホーム６',
+      'こもれびホームマハロ'
+    ];
+
+    const { createClient } = supabase;
+    const db = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
     function getReiwaDate(isoDate) {
       const [y, m, d] = isoDate.split('-').map(Number);
       const dt = new Date(y, m - 1, d);
@@ -151,10 +160,7 @@
       return `令和${y - 2018}年${m}月${d}日（${days[dt.getDay()]}）`;
     }
 
-    function render(data) {
-      const { ghName, date, reporter, residents } = data;
-      const dateStr = getReiwaDate(date);
-
+    function render(ghName, dateStr, reporter, residents, updatedAt) {
       document.getElementById('header-title').textContent = ghName;
       document.getElementById('header-sub').textContent = dateStr;
       document.title = `${ghName} 報告書 ${dateStr}`;
@@ -168,6 +174,10 @@
           </div>
         `;
       });
+
+      const tsText = updatedAt
+        ? `更新: ${new Date(updatedAt).toLocaleString('ja-JP')}`
+        : '';
 
       document.getElementById('content').innerHTML = `
         <table class="report-table">
@@ -193,36 +203,57 @@
           ${residentRows || '<p style="color:#999">（記録なし）</p>'}
         </div>
 
-        <div class="timestamp" id="ts"></div>
+        <div class="timestamp">${tsText}</div>
       `;
     }
 
-    // Decode URL hash
-    const hash = location.hash.slice(1);
-    if (!hash) {
-      document.getElementById('content').innerHTML = `
-        <div class="error-state">
-          <div class="icon">🔗</div>
-          <p>URLが正しくありません。<br>報告ページからシェアURLを生成してください。</p>
-        </div>
-      `;
-    } else {
-      try {
-        const json = decodeURIComponent(escape(atob(hash)));
-        const data = JSON.parse(json);
-        render(data);
-        if (data.sharedAt) {
-          document.getElementById('ts').textContent = `共有日時: ${new Date(data.sharedAt).toLocaleString('ja-JP')}`;
-        }
-      } catch(e) {
+    async function load() {
+      const params = new URLSearchParams(location.search);
+      const ghParam = params.get('gh');
+      const dateParam = params.get('date');
+
+      if (!ghParam || !dateParam) {
+        document.getElementById('content').innerHTML = `
+          <div class="error-state">
+            <div class="icon">🔗</div>
+            <p>URLが正しくありません。<br>報告ページからシェアURLを生成してください。</p>
+          </div>
+        `;
+        return;
+      }
+
+      const ghName = GH_NAMES[parseInt(ghParam) - 1] || `ホーム${ghParam}`;
+      const dateStr = getReiwaDate(dateParam);
+
+      const { data, error } = await db.from('reports').select('*')
+        .eq('gh_num', parseInt(ghParam))
+        .eq('report_date', dateParam)
+        .maybeSingle();
+
+      if (error) {
         document.getElementById('content').innerHTML = `
           <div class="error-state">
             <div class="icon">⚠️</div>
-            <p>データの読み込みに失敗しました。<br>URLが壊れている可能性があります。</p>
+            <p>データの読み込みに失敗しました。<br>${error.message}</p>
           </div>
         `;
+        return;
       }
+
+      if (!data) {
+        document.getElementById('content').innerHTML = `
+          <div class="error-state">
+            <div class="icon">📭</div>
+            <p>${ghName}<br>${dateStr}<br><br>まだ記録がありません。</p>
+          </div>
+        `;
+        return;
+      }
+
+      render(ghName, dateStr, data.reporter, data.residents, data.updated_at);
     }
+
+    load();
   </script>
 </body>
 </html>
