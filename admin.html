@@ -412,36 +412,6 @@
     const { createClient } = supabase;
     const db = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
-    // ─── Password Gate ────────────────────────────────────
-    function checkPassword() {
-      const v = document.getElementById('pw-input').value;
-      if (v === ADMIN_PASSWORD) {
-        sessionStorage.setItem('admin_auth', '1');
-        document.getElementById('pw-gate').style.display = 'none';
-        initDashboard();
-      } else {
-        document.getElementById('pw-error').textContent = 'パスワードが違います';
-        document.getElementById('pw-input').value = '';
-        document.getElementById('pw-input').focus();
-      }
-    }
-    document.getElementById('pw-input').addEventListener('keydown', e => {
-      if (e.key === 'Enter') checkPassword();
-    });
-    if (sessionStorage.getItem('admin_auth') === '1') {
-      document.getElementById('pw-gate').style.display = 'none';
-      initDashboard();
-    }
-
-    // ─── Tab Switching ─────────────────────────────────────
-    function switchTab(name) {
-      document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
-      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-      document.getElementById(`tab-${name}`).classList.add('active');
-      event.target.classList.add('active');
-      document.getElementById('date-bar').style.display = (name === 'reports') ? 'flex' : 'none';
-    }
-
     // ─── Date ─────────────────────────────────────────────
     function todayISO() {
       const t = new Date();
@@ -463,6 +433,36 @@
       document.getElementById('date-formatted').textContent = getReiwaDate(selectedDate);
       loadAllHomes(selectedDate);
     });
+
+    // ─── Tab Switching ─────────────────────────────────────
+    function switchTab(name) {
+      document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
+      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+      document.getElementById(`tab-${name}`).classList.add('active');
+      event.target.classList.add('active');
+      document.getElementById('date-bar').style.display = (name === 'reports') ? 'flex' : 'none';
+    }
+
+    // ─── Password Gate ────────────────────────────────────
+    function checkPassword() {
+      const v = document.getElementById('pw-input').value;
+      if (v === ADMIN_PASSWORD) {
+        sessionStorage.setItem('admin_auth', '1');
+        document.getElementById('pw-gate').style.display = 'none';
+        initDashboard();
+      } else {
+        document.getElementById('pw-error').textContent = 'パスワードが違います';
+        document.getElementById('pw-input').value = '';
+        document.getElementById('pw-input').focus();
+      }
+    }
+    document.getElementById('pw-input').addEventListener('keydown', e => {
+      if (e.key === 'Enter') checkPassword();
+    });
+    if (sessionStorage.getItem('admin_auth') === '1') {
+      document.getElementById('pw-gate').style.display = 'none';
+      initDashboard();
+    }
 
     // ─── Dashboard Init ────────────────────────────────────
     function initDashboard() {
