@@ -6,8 +6,6 @@
   <title>業務日報 入力</title>
   <script src="config.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
-  <script src="https://unpkg.com/html-docx-js@0.3.1/dist/html-docx.js"></script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
@@ -736,7 +734,8 @@
     }
 
     // ─── Word Export ──────────────────────────────────────
-    function exportWord() {
+    async function exportWord() {
+      try { await loadWordLibs(); } catch(e) { alert('Word出力ライブラリの読み込みに失敗しました'); return; }
       saveCurrentData();
       const reporter = reporterEl.value || '';
       const dateStr = getReiwaDate(dateEl.value);
@@ -790,10 +789,80 @@ ${entriesHTML}
       }
     }
 
-    // ─── Init ─────────────────────────────────────────────
+    // ─── Word libs (lazy load on first use) ──────────────
+    let wordLibsLoaded = false;
+    function loadWordLibs() {
+      if (wordLibsLoaded) return Promise.resolve();
+      return Promise.all([
+        new Promise((res, rej) => {
+          const s = document.createElement('script');
+          s.src = 'https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js';
+          s.onload = res; s.onerror = rej;
+          document.head.appendChild(s);
+        }),
+        new Promise((res, rej) => {
+          const s = document.createElement('script');
+          s.src = 'https://unpkg.com/html-docx-js@0.3.1/dist/html-docx.js';
+          s.onload = res; s.onerror = rej;
+          document.head.appendChild(s);
+        })
+      ]).then(() => { wordLibsLoaded = true; });
+    }
+
+    // ─── Init (parallel fetch) ────────────────────────────
     async function init() {
-      await initResidents();
-      await loadDateData(dateEl.value);
+      const dateISO = dateEl.value;
+      const container = document.getElementById('residents-container');
+      container.innerHTML = '<div style="text-align:center;padding:20px;color:#aaa;font-size:14px">読み込み中...</div>';
+
+      const [{ data: residentsData }, { data: reportData }] = await Promise.all([
+        db.from('residents').select('name').eq('gh_num', parseInt(ghNum)).eq('active', true).order('sort_order'),
+        db.from('reports').select('*').eq('gh_num', parseInt(ghNum)).eq('report_date', dateISO).maybeSingle()
+      ]);
+
+      // Render residents
+      const residentNames = (residentsData || []).map(r => r.name);
+      container.innerHTML = '';
+      if (residentNames.length === 0) {
+        container.innerHTML = `
+          <div class="no-residents">
+            <p>利用者が登録されていません</p>
+            <p style="font-size:13px;color:#aaa;margin-top:8px">管理者ページから利用者を登録してください</p>
+          </div>`;
+      } else {
+        residentNames.forEach(name => {
+          const div = document.createElement('div');
+          div.className = 'resident-entry';
+          div.dataset.name = name;
+          div.innerHTML = `
+            <div class="resident-name-label">${name}</div>
+            <textarea placeholder="${name}の様子を記入（帰宅〜朝の流れ）..."></textarea>
+          `;
+          container.appendChild(div);
+        });
+        container.querySelectorAll('textarea').forEach(ta => {
+          ta.addEventListener('input', function() { autoExpand(this); scheduleAutoSave(); });
+        });
+      }
+
+      // Apply saved report data
+      document.getElementById('existing-badge').textContent = reportData ? '記録あり ✓' : '';
+      if (reportData) {
+        reporterEl.value = reportData.reporter || '';
+        shortageItems = (reportData.shortage || []).map(item =>
+          typeof item === 'string' ? { text: item, checked: false } : { text: item.text || '', checked: !!item.checked }
+        );
+        renderShortageList();
+        document.querySelectorAll('.resident-entry').forEach(entry => {
+          const ta = entry.querySelector('textarea');
+          ta.value = (reportData.residents || {})[entry.dataset.name] || '';
+          autoExpand(ta);
+        });
+      } else {
+        reporterEl.value = localStorage.getItem('lastReporter') || '';
+        shortageItems = [];
+        renderShortageList();
+      }
     }
     init();
   </script>
