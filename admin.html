@@ -18,7 +18,7 @@
     .page-header {
       background: #2c3e50;
       color: white;
-      padding: 14px 20px;
+      padding: 14px 20px 0;
       position: sticky;
       top: 0;
       z-index: 100;
@@ -45,6 +45,7 @@
       display: flex;
       align-items: center;
       gap: 10px;
+      margin-bottom: 10px;
     }
     .date-bar label { font-size: 13px; opacity: 0.8; }
     .date-bar input[type="date"] {
@@ -59,8 +60,36 @@
     .date-bar input[type="date"]::-webkit-calendar-picker-indicator { filter: invert(1); }
     .date-formatted { font-size: 14px; opacity: 0.9; font-weight: bold; }
 
+    /* TABS */
+    .tab-bar {
+      display: flex;
+      gap: 0;
+    }
+    .tab-btn {
+      flex: 1;
+      padding: 10px 8px;
+      background: none;
+      border: none;
+      color: rgba(255,255,255,0.6);
+      font-size: 13px;
+      font-weight: bold;
+      font-family: inherit;
+      cursor: pointer;
+      border-bottom: 3px solid transparent;
+      transition: all 0.15s;
+      text-align: center;
+    }
+    .tab-btn.active {
+      color: white;
+      border-bottom-color: #2ecc71;
+    }
+
+    .tab-pane { display: none; }
+    .tab-pane.active { display: block; }
+
     .content { padding: 16px; max-width: 720px; margin: 0 auto; }
 
+    /* SUMMARY */
     .summary-bar {
       display: flex;
       gap: 12px;
@@ -84,12 +113,12 @@
     .chip-done .num { color: #2ecc71; }
     .chip-pending .num { color: #e74c3c; }
 
+    /* GH GRID */
     .gh-grid {
       display: grid;
       grid-template-columns: repeat(2, 1fr);
       gap: 12px;
     }
-
     .gh-card {
       background: white;
       border-radius: 12px;
@@ -103,110 +132,62 @@
     }
     .gh-card.has-report { border-left-color: #2ecc71; }
     .gh-card.loading { opacity: 0.5; }
-
-    .card-name {
-      font-size: 14px;
-      font-weight: bold;
-      color: #1a2a3a;
-      line-height: 1.3;
-    }
+    .card-name { font-size: 14px; font-weight: bold; color: #1a2a3a; line-height: 1.3; }
     .card-status {
-      font-size: 13px;
-      font-weight: bold;
-      padding: 3px 10px;
-      border-radius: 12px;
-      display: inline-block;
-      width: fit-content;
+      font-size: 13px; font-weight: bold;
+      padding: 3px 10px; border-radius: 12px;
+      display: inline-block; width: fit-content;
     }
     .status-ok { background: #e8faf0; color: #2ecc71; }
     .status-none { background: #f5f5f5; color: #aaa; }
-
     .card-reporter { font-size: 13px; color: #5a6a7a; }
     .card-time { font-size: 11px; color: #aaa; }
-
     .card-link {
-      display: inline-block;
-      margin-top: 6px;
-      font-size: 13px;
-      color: #4a90d9;
-      text-decoration: none;
-      font-weight: bold;
+      display: inline-block; margin-top: 6px;
+      font-size: 13px; color: #4a90d9;
+      text-decoration: none; font-weight: bold;
     }
     .card-link:hover { text-decoration: underline; }
-
     .shortage-section {
-      margin-top: 8px;
-      padding: 8px 10px;
-      background: #fff8f0;
-      border: 1px solid #f39c12;
-      border-radius: 8px;
+      margin-top: 8px; padding: 8px 10px;
+      background: #fff8f0; border: 1px solid #f39c12; border-radius: 8px;
     }
-    .shortage-header {
-      font-size: 11px;
-      font-weight: bold;
-      color: #f39c12;
-      margin-bottom: 6px;
-    }
+    .shortage-header { font-size: 11px; font-weight: bold; color: #f39c12; margin-bottom: 6px; }
     .shortage-item {
-      display: flex;
-      align-items: center;
-      gap: 7px;
-      padding: 3px 0;
-      font-size: 12px;
-      color: #7a5a00;
+      display: flex; align-items: center; gap: 7px;
+      padding: 3px 0; font-size: 12px; color: #7a5a00;
     }
     .shortage-item.checked { color: #aaa; }
     .shortage-item.checked .shortage-item-text { text-decoration: line-through; }
     .shortage-item-text { flex: 1; line-height: 1.4; }
     .shortage-checkbox {
-      width: 16px; height: 16px;
-      cursor: pointer;
-      flex-shrink: 0;
-      accent-color: #2ecc71;
+      width: 16px; height: 16px; cursor: pointer;
+      flex-shrink: 0; accent-color: #2ecc71;
     }
 
     /* MODAL */
     .modal-overlay {
-      position: fixed;
-      inset: 0;
-      background: rgba(0,0,0,0.5);
-      z-index: 200;
-      display: flex;
-      align-items: flex-end;
+      position: fixed; inset: 0;
+      background: rgba(0,0,0,0.5); z-index: 200;
+      display: flex; align-items: flex-end;
     }
     .modal-box {
-      background: white;
-      border-radius: 20px 20px 0 0;
-      width: 100%;
-      max-height: 88vh;
-      display: flex;
-      flex-direction: column;
+      background: white; border-radius: 20px 20px 0 0;
+      width: 100%; max-height: 88vh; display: flex; flex-direction: column;
     }
     .modal-head {
-      padding: 16px 20px;
-      border-bottom: 1px solid #eee;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      flex-shrink: 0;
+      padding: 16px 20px; border-bottom: 1px solid #eee;
+      display: flex; align-items: center; justify-content: space-between; flex-shrink: 0;
     }
     .modal-head h2 { font-size: 15px; font-weight: bold; }
     .btn-close {
-      background: #f0f0f0;
-      border: none;
-      border-radius: 50%;
-      width: 32px; height: 32px;
-      font-size: 16px;
-      cursor: pointer;
+      background: #f0f0f0; border: none; border-radius: 50%;
+      width: 32px; height: 32px; font-size: 16px; cursor: pointer;
     }
     .modal-body {
-      flex: 1;
-      overflow-y: auto;
-      padding: 20px;
+      flex: 1; overflow-y: auto; padding: 20px;
       -webkit-overflow-scrolling: touch;
     }
-
-    /* DETAIL */
     .d-reporter { font-size: 14px; color: #5a6a7a; margin-bottom: 14px; }
     .d-resident { margin-bottom: 14px; }
     .d-resident .r-name { font-weight: bold; font-size: 14px; margin-bottom: 4px; }
@@ -217,67 +198,117 @@
     }
     .d-empty { color: #999; font-size: 13px; text-align: center; padding: 20px; }
 
+    /* ERROR */
     .error-msg {
-      background: #ffecec;
-      border: 1px solid #e74c3c;
-      border-radius: 10px;
-      padding: 16px;
-      margin-bottom: 16px;
-      font-size: 14px;
-      color: #c0392b;
+      background: #ffecec; border: 1px solid #e74c3c;
+      border-radius: 10px; padding: 16px; margin-bottom: 16px;
+      font-size: 14px; color: #c0392b;
     }
+
+    /* ── RESIDENTS TAB ── */
+    .gh-selector {
+      background: white; border-radius: 12px;
+      padding: 14px 16px; margin-bottom: 14px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.06);
+    }
+    .gh-selector label { font-size: 13px; font-weight: bold; color: #3a4a5a; margin-bottom: 8px; display: block; }
+    .gh-tabs { display: flex; flex-wrap: wrap; gap: 8px; }
+    .gh-tab {
+      padding: 7px 14px; border-radius: 20px;
+      border: 1.5px solid #c0ccda;
+      background: white; color: #5a6a7a;
+      font-size: 13px; font-weight: bold; font-family: inherit;
+      cursor: pointer; transition: all 0.15s;
+    }
+    .gh-tab.active {
+      background: #2c3e50; color: white; border-color: #2c3e50;
+    }
+
+    .residents-card {
+      background: white; border-radius: 12px; padding: 16px;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.06); margin-bottom: 14px;
+    }
+    .residents-card h3 { font-size: 14px; font-weight: bold; color: #1a2a3a; margin-bottom: 14px; }
+
+    .add-resident-row { display: flex; gap: 8px; margin-bottom: 14px; }
+    .add-resident-input {
+      flex: 1; padding: 10px 14px;
+      border: 1.5px solid #d0d8e8; border-radius: 10px;
+      font-size: 14px; font-family: inherit;
+    }
+    .add-resident-input:focus { outline: none; border-color: #2c3e50; }
+    .btn-add-resident {
+      padding: 10px 18px;
+      background: #2c3e50; color: white; border: none;
+      border-radius: 10px; font-size: 14px; font-weight: bold;
+      font-family: inherit; cursor: pointer; white-space: nowrap;
+    }
+    .btn-add-resident:active { background: #1a2a3a; }
+
+    .resident-list { display: flex; flex-direction: column; gap: 8px; }
+    .resident-item {
+      display: flex; align-items: center; gap: 10px;
+      padding: 10px 12px; background: #f8f9fa;
+      border-radius: 8px; font-size: 14px; color: #1a2a3a;
+    }
+    .resident-item-name { flex: 1; }
+    .btn-del-resident {
+      background: none; border: none;
+      color: #e74c3c; font-size: 18px;
+      cursor: pointer; line-height: 1; padding: 0 4px;
+    }
+    .resident-empty { font-size: 13px; color: #aaa; text-align: center; padding: 20px; }
+
+    /* ── STAFF URL TAB ── */
+    .url-grid { display: flex; flex-direction: column; gap: 12px; }
+    .url-card {
+      background: white; border-radius: 12px; padding: 16px;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.06);
+      display: flex; align-items: center; gap: 16px;
+    }
+    .url-card-info { flex: 1; overflow: hidden; }
+    .url-card-name { font-size: 14px; font-weight: bold; color: #1a2a3a; margin-bottom: 6px; }
+    .url-card-url {
+      font-size: 11px; color: #4a90d9;
+      word-break: break-all; margin-bottom: 8px;
+    }
+    .btn-copy {
+      padding: 7px 14px; background: #eef2f7;
+      border: 1.5px solid #c0ccda; border-radius: 8px;
+      font-size: 12px; font-weight: bold; font-family: inherit;
+      cursor: pointer; color: #3a4a5a;
+    }
+    .btn-copy.copied { background: #e8faf0; border-color: #2ecc71; color: #2ecc71; }
+    .url-qr img { width: 96px; height: 96px; border-radius: 8px; display: block; }
 
     /* PASSWORD GATE */
     .pw-gate {
-      position: fixed;
-      inset: 0;
-      background: #2c3e50;
-      z-index: 9999;
-      display: flex;
-      align-items: center;
-      justify-content: center;
+      position: fixed; inset: 0;
+      background: #2c3e50; z-index: 9999;
+      display: flex; align-items: center; justify-content: center;
     }
     .pw-box {
-      background: white;
-      border-radius: 16px;
-      padding: 36px 32px;
-      width: 320px;
-      text-align: center;
-      box-shadow: 0 8px 32px rgba(0,0,0,0.3);
+      background: white; border-radius: 16px;
+      padding: 36px 32px; width: 320px;
+      text-align: center; box-shadow: 0 8px 32px rgba(0,0,0,0.3);
     }
     .pw-box h2 { font-size: 18px; color: #1a2a3a; margin-bottom: 6px; }
     .pw-box p { font-size: 13px; color: #7a8a9a; margin-bottom: 20px; }
     .pw-input {
-      width: 100%;
-      padding: 12px 16px;
-      border: 1.5px solid #d0d8e8;
-      border-radius: 10px;
-      font-size: 16px;
-      font-family: inherit;
-      text-align: center;
-      letter-spacing: 2px;
-      margin-bottom: 14px;
+      width: 100%; padding: 12px 16px;
+      border: 1.5px solid #d0d8e8; border-radius: 10px;
+      font-size: 16px; font-family: inherit;
+      text-align: center; letter-spacing: 2px; margin-bottom: 14px;
     }
     .pw-input:focus { outline: none; border-color: #4a90d9; }
     .pw-btn {
-      width: 100%;
-      padding: 13px;
-      background: #2c3e50;
-      color: white;
-      border: none;
-      border-radius: 10px;
-      font-size: 15px;
-      font-weight: bold;
-      cursor: pointer;
-      font-family: inherit;
+      width: 100%; padding: 13px;
+      background: #2c3e50; color: white; border: none;
+      border-radius: 10px; font-size: 15px; font-weight: bold;
+      cursor: pointer; font-family: inherit;
     }
     .pw-btn:active { background: #1a2a3a; }
-    .pw-error {
-      font-size: 13px;
-      color: #e74c3c;
-      margin-top: 10px;
-      min-height: 18px;
-    }
+    .pw-error { font-size: 13px; color: #e74c3c; margin-top: 10px; min-height: 18px; }
   </style>
 </head>
 <body>
@@ -298,28 +329,61 @@
       <h1>🏠 管理者ダッシュボード</h1>
       <span class="realtime-badge" id="rt-badge">🔄 接続中...</span>
     </div>
-    <div class="date-bar">
+    <div class="date-bar" id="date-bar">
       <label>日付</label>
       <input type="date" id="admin-date">
       <span class="date-formatted" id="date-formatted"></span>
     </div>
+    <div class="tab-bar">
+      <button class="tab-btn active" onclick="switchTab('reports')">📋 日報確認</button>
+      <button class="tab-btn" onclick="switchTab('residents')">👤 入居者管理</button>
+      <button class="tab-btn" onclick="switchTab('urls')">🔗 スタッフURL</button>
+    </div>
   </div>
 
-  <div class="content">
-    <div id="error-area"></div>
-
-    <div class="summary-bar">
-      <div class="summary-chip chip-done">
-        <div class="num" id="count-done">-</div>
-        <div class="lbl">記録あり</div>
+  <!-- Tab: 日報確認 -->
+  <div id="tab-reports" class="tab-pane active">
+    <div class="content">
+      <div id="error-area"></div>
+      <div class="summary-bar">
+        <div class="summary-chip chip-done">
+          <div class="num" id="count-done">-</div>
+          <div class="lbl">記録あり</div>
+        </div>
+        <div class="summary-chip chip-pending">
+          <div class="num" id="count-pending">-</div>
+          <div class="lbl">未記入</div>
+        </div>
       </div>
-      <div class="summary-chip chip-pending">
-        <div class="num" id="count-pending">-</div>
-        <div class="lbl">未記入</div>
+      <div class="gh-grid" id="gh-grid"></div>
+    </div>
+  </div>
+
+  <!-- Tab: 入居者管理 -->
+  <div id="tab-residents" class="tab-pane">
+    <div class="content">
+      <div class="gh-selector">
+        <label>グループホームを選択</label>
+        <div class="gh-tabs" id="gh-tabs-resident"></div>
+      </div>
+      <div class="residents-card">
+        <h3 id="residents-gh-title">—</h3>
+        <div class="add-resident-row">
+          <input type="text" id="new-resident-name" class="add-resident-input" placeholder="利用者名を入力" maxlength="30">
+          <button class="btn-add-resident" onclick="addResident()">追加</button>
+        </div>
+        <div class="resident-list" id="resident-list">
+          <div class="resident-empty">GHを選択してください</div>
+        </div>
       </div>
     </div>
+  </div>
 
-    <div class="gh-grid" id="gh-grid"></div>
+  <!-- Tab: スタッフURL -->
+  <div id="tab-urls" class="tab-pane">
+    <div class="content">
+      <div class="url-grid" id="url-grid"></div>
+    </div>
   </div>
 
   <!-- Detail Modal -->
@@ -334,10 +398,24 @@
   </div>
 
   <script>
+    const GH_NAMES = [
+      'こもれびホーム３−２',
+      'こもれびホーム４',
+      'こもれびホーム５−１',
+      'こもれびホーム５−２',
+      'こもれびホーム６',
+      'こもれびホームマハロ'
+    ];
+    const REPORT_BASE_URL = 'https://pumpstack-lab.github.io/gh-report-tool/report.html?gh=';
+
+    // ─── Supabase ─────────────────────────────────────────
+    const { createClient } = supabase;
+    const db = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
     // ─── Password Gate ────────────────────────────────────
     function checkPassword() {
-      const val = document.getElementById('pw-input').value;
-      if (val === ADMIN_PASSWORD) {
+      const v = document.getElementById('pw-input').value;
+      if (v === ADMIN_PASSWORD) {
         sessionStorage.setItem('admin_auth', '1');
         document.getElementById('pw-gate').style.display = 'none';
         initDashboard();
@@ -355,33 +433,14 @@
       initDashboard();
     }
 
-    function initDashboard() {
-      renderGrid([], selectedDate);
-      loadAllHomes(selectedDate);
-      channel.subscribe((status) => {
-        const badge = document.getElementById('rt-badge');
-        if (status === 'SUBSCRIBED') {
-          badge.textContent = '🟢 リアルタイム';
-          badge.classList.remove('offline');
-        } else {
-          badge.textContent = '⚠️ 再接続中';
-          badge.classList.add('offline');
-        }
-      });
+    // ─── Tab Switching ─────────────────────────────────────
+    function switchTab(name) {
+      document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
+      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+      document.getElementById(`tab-${name}`).classList.add('active');
+      event.target.classList.add('active');
+      document.getElementById('date-bar').style.display = (name === 'reports') ? 'flex' : 'none';
     }
-
-    const GH_NAMES = [
-      'こもれびホーム３−２',
-      'こもれびホーム４',
-      'こもれびホーム５−１',
-      'こもれびホーム５−２',
-      'こもれびホーム６',
-      'こもれびホームマハロ'
-    ];
-
-    // ─── Supabase ─────────────────────────────────────────
-    const { createClient } = supabase;
-    const db = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
     // ─── Date ─────────────────────────────────────────────
     function todayISO() {
@@ -399,51 +458,56 @@
     const adminDateEl = document.getElementById('admin-date');
     adminDateEl.value = selectedDate;
     document.getElementById('date-formatted').textContent = getReiwaDate(selectedDate);
-
     adminDateEl.addEventListener('change', () => {
       selectedDate = adminDateEl.value;
       document.getElementById('date-formatted').textContent = getReiwaDate(selectedDate);
       loadAllHomes(selectedDate);
     });
 
-    // ─── Load ─────────────────────────────────────────────
+    // ─── Dashboard Init ────────────────────────────────────
+    function initDashboard() {
+      renderGrid([], selectedDate);
+      loadAllHomes(selectedDate);
+      channel.subscribe((status) => {
+        const badge = document.getElementById('rt-badge');
+        if (status === 'SUBSCRIBED') {
+          badge.textContent = '🟢 リアルタイム';
+          badge.classList.remove('offline');
+        } else {
+          badge.textContent = '⚠️ 再接続中';
+          badge.classList.add('offline');
+        }
+      });
+      buildGhTabsForResidents();
+      buildUrlGrid();
+    }
+
+    // ─── Report Load ──────────────────────────────────────
     async function loadAllHomes(dateISO) {
       setCardsLoading();
-      const { data, error } = await db
-        .from('reports')
-        .select('*')
-        .eq('report_date', dateISO)
-        .order('gh_num');
-
-      if (error) {
-        showError('データの読み込みに失敗しました: ' + error.message);
-        return;
-      }
+      const { data, error } = await db.from('reports').select('*').eq('report_date', dateISO).order('gh_num');
+      if (error) { showError('データの読み込みに失敗しました: ' + error.message); return; }
       renderGrid(data || [], dateISO);
     }
 
     function setCardsLoading() {
-      const grid = document.getElementById('gh-grid');
       for (let i = 1; i <= 6; i++) {
-        const existing = document.getElementById(`card-${i}`);
-        if (existing) existing.classList.add('loading');
+        const el = document.getElementById(`card-${i}`);
+        if (el) el.classList.add('loading');
       }
     }
 
     function renderGrid(reports, dateISO) {
       const reportMap = {};
       reports.forEach(r => reportMap[r.gh_num] = r);
-
       const grid = document.getElementById('gh-grid');
       grid.innerHTML = '';
-
       let done = 0;
       for (let i = 1; i <= 6; i++) {
         const report = reportMap[i];
         if (report) done++;
         grid.appendChild(buildCard(i, report, dateISO));
       }
-
       document.getElementById('count-done').textContent = done;
       document.getElementById('count-pending').textContent = 6 - done;
     }
@@ -473,9 +537,9 @@
       `;
 
       if (shortage.length > 0) {
-        const shortageWrap = document.createElement('div');
-        shortageWrap.className = 'shortage-section';
-        shortageWrap.innerHTML = '<div class="shortage-header">不足品</div>';
+        const sw = document.createElement('div');
+        sw.className = 'shortage-section';
+        sw.innerHTML = '<div class="shortage-header">不足品</div>';
         shortage.forEach((item, idx) => {
           const itemDiv = document.createElement('div');
           itemDiv.className = `shortage-item${item.checked ? ' checked' : ''}`;
@@ -486,13 +550,8 @@
           cb.addEventListener('change', async (e) => {
             e.stopPropagation();
             const newChecked = e.target.checked;
-            const updated = shortage.map((s, i) =>
-              i === idx ? { ...s, checked: newChecked } : s
-            );
-            await db.from('reports')
-              .update({ shortage: updated })
-              .eq('gh_num', ghNum)
-              .eq('report_date', dateISO);
+            const updated = shortage.map((s, i) => i === idx ? { ...s, checked: newChecked } : s);
+            await db.from('reports').update({ shortage: updated }).eq('gh_num', ghNum).eq('report_date', dateISO);
             itemDiv.className = `shortage-item${newChecked ? ' checked' : ''}`;
             shortage[idx] = { ...shortage[idx], checked: newChecked };
           });
@@ -501,9 +560,9 @@
           label.textContent = item.text;
           itemDiv.appendChild(cb);
           itemDiv.appendChild(label);
-          shortageWrap.appendChild(itemDiv);
+          sw.appendChild(itemDiv);
         });
-        div.appendChild(shortageWrap);
+        div.appendChild(sw);
       }
 
       if (hasReport) {
@@ -514,46 +573,30 @@
         link.onclick = (e) => { e.preventDefault(); showDetail(ghNum, report); };
         div.appendChild(link);
       }
-
       return div;
     }
 
     // ─── Detail Modal ─────────────────────────────────────
     function showDetail(ghNum, report) {
-      const ghName = GH_NAMES[ghNum - 1];
-      document.getElementById('modal-title').textContent = ghName;
-
+      document.getElementById('modal-title').textContent = GH_NAMES[ghNum - 1];
       const residents = report.residents || {};
       let html = '';
-
-      if (report.reporter) {
-        html += `<div class="d-reporter">報告者: ${report.reporter}</div>`;
-      }
-
+      if (report.reporter) html += `<div class="d-reporter">報告者: ${report.reporter}</div>`;
       const entries = Object.entries(residents);
       if (entries.length === 0) {
         html += '<div class="d-empty">記録なし</div>';
       } else {
         entries.forEach(([name, text]) => {
-          html += `
-            <div class="d-resident">
-              <div class="r-name">${name}</div>
-              <div class="r-text">${text || '（未入力）'}</div>
-            </div>
-          `;
+          html += `<div class="d-resident"><div class="r-name">${name}</div><div class="r-text">${text || '（未入力）'}</div></div>`;
         });
       }
-
       const shortageArr = Array.isArray(report.shortage) ? report.shortage : [];
       if (shortageArr.length > 0) {
         html += `<div style="margin-top:16px;font-weight:bold;font-size:13px;color:#f39c12">【不足品】</div>`;
         shortageArr.forEach(item => {
-          html += `<div style="font-size:13px;padding:4px 0;${item.checked ? 'text-decoration:line-through;color:#aaa' : 'color:#7a5a00'}">
-            ${item.checked ? '☑' : '☐'} ${item.text}
-          </div>`;
+          html += `<div style="font-size:13px;padding:4px 0;${item.checked ? 'text-decoration:line-through;color:#aaa' : 'color:#7a5a00'}">${item.checked ? '☑' : '☐'} ${item.text}</div>`;
         });
       }
-
       document.getElementById('modal-body').innerHTML = html;
       document.getElementById('modal').style.display = 'flex';
     }
@@ -565,13 +608,139 @@
     // ─── Realtime ─────────────────────────────────────────
     const channel = db.channel('admin-realtime')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'reports' },
-        () => loadAllHomes(selectedDate)
-      );
+        () => loadAllHomes(selectedDate));
 
     // ─── Error ────────────────────────────────────────────
     function showError(msg) {
-      document.getElementById('error-area').innerHTML =
-        `<div class="error-msg">⚠️ ${msg}</div>`;
+      document.getElementById('error-area').innerHTML = `<div class="error-msg">⚠️ ${msg}</div>`;
+    }
+
+    // ─── Residents Tab ─────────────────────────────────────
+    let selectedGhForResidents = 1;
+
+    function buildGhTabsForResidents() {
+      const container = document.getElementById('gh-tabs-resident');
+      container.innerHTML = '';
+      GH_NAMES.forEach((name, idx) => {
+        const btn = document.createElement('button');
+        btn.className = `gh-tab${idx === 0 ? ' active' : ''}`;
+        btn.textContent = name;
+        btn.onclick = () => {
+          document.querySelectorAll('.gh-tab').forEach(b => b.classList.remove('active'));
+          btn.classList.add('active');
+          selectedGhForResidents = idx + 1;
+          loadResidents(idx + 1);
+        };
+        container.appendChild(btn);
+      });
+      loadResidents(1);
+    }
+
+    async function loadResidents(ghNum) {
+      document.getElementById('residents-gh-title').textContent = GH_NAMES[ghNum - 1];
+      const list = document.getElementById('resident-list');
+      list.innerHTML = '<div class="resident-empty">読み込み中...</div>';
+
+      const { data, error } = await db.from('residents')
+        .select('id, name, sort_order')
+        .eq('gh_num', ghNum)
+        .eq('active', true)
+        .order('sort_order');
+
+      if (error) {
+        list.innerHTML = `<div class="resident-empty" style="color:#e74c3c">読み込みに失敗しました</div>`;
+        return;
+      }
+
+      if (!data || data.length === 0) {
+        list.innerHTML = '<div class="resident-empty">利用者が登録されていません</div>';
+        return;
+      }
+
+      list.innerHTML = '';
+      data.forEach(r => {
+        const item = document.createElement('div');
+        item.className = 'resident-item';
+        item.innerHTML = `
+          <span class="resident-item-name">${r.name}</span>
+          <button class="btn-del-resident" title="削除" onclick="deleteResident(${r.id}, ${ghNum})">×</button>
+        `;
+        list.appendChild(item);
+      });
+    }
+
+    async function addResident() {
+      const input = document.getElementById('new-resident-name');
+      const name = input.value.trim();
+      if (!name) return;
+
+      const { data: existing } = await db.from('residents')
+        .select('id')
+        .eq('gh_num', selectedGhForResidents)
+        .order('sort_order', { ascending: false })
+        .limit(1);
+
+      const nextSort = existing && existing.length > 0 ? (existing[0].sort_order || 0) + 1 : 0;
+
+      const { error } = await db.from('residents').upsert({
+        gh_num: selectedGhForResidents,
+        name: name,
+        sort_order: nextSort,
+        active: true
+      }, { onConflict: 'gh_num,name' });
+
+      if (error) {
+        alert('追加に失敗しました: ' + error.message);
+        return;
+      }
+
+      input.value = '';
+      loadResidents(selectedGhForResidents);
+    }
+
+    document.getElementById('new-resident-name').addEventListener('keydown', e => {
+      if (e.key === 'Enter') addResident();
+    });
+
+    async function deleteResident(id, ghNum) {
+      if (!confirm('この利用者を削除しますか？')) return;
+      const { error } = await db.from('residents').update({ active: false }).eq('id', id);
+      if (error) { alert('削除に失敗しました'); return; }
+      loadResidents(ghNum);
+    }
+
+    // ─── Staff URL Tab ─────────────────────────────────────
+    function buildUrlGrid() {
+      const grid = document.getElementById('url-grid');
+      grid.innerHTML = '';
+      GH_NAMES.forEach((name, idx) => {
+        const ghNum = idx + 1;
+        const url = REPORT_BASE_URL + ghNum;
+        const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=192x192&data=${encodeURIComponent(url)}`;
+
+        const card = document.createElement('div');
+        card.className = 'url-card';
+        card.innerHTML = `
+          <div class="url-card-info">
+            <div class="url-card-name">${name}</div>
+            <div class="url-card-url">${url}</div>
+            <button class="btn-copy" id="copy-btn-${ghNum}" onclick="copyUrl('${url}', ${ghNum})">コピー</button>
+          </div>
+          <div class="url-qr">
+            <img src="${qrUrl}" alt="QR ${name}" loading="lazy">
+          </div>
+        `;
+        grid.appendChild(card);
+      });
+    }
+
+    function copyUrl(url, ghNum) {
+      navigator.clipboard.writeText(url).then(() => {
+        const btn = document.getElementById(`copy-btn-${ghNum}`);
+        btn.textContent = 'コピー済み ✓';
+        btn.classList.add('copied');
+        setTimeout(() => { btn.textContent = 'コピー'; btn.classList.remove('copied'); }, 2000);
+      });
     }
   </script>
 </body>
