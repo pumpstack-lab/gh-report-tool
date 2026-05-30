@@ -468,16 +468,19 @@
     function initDashboard() {
       renderGrid([], selectedDate);
       loadAllHomes(selectedDate);
-      channel.subscribe((status) => {
-        const badge = document.getElementById('rt-badge');
-        if (status === 'SUBSCRIBED') {
-          badge.textContent = '🟢 リアルタイム';
-          badge.classList.remove('offline');
-        } else {
-          badge.textContent = '⚠️ 再接続中';
-          badge.classList.add('offline');
-        }
-      });
+      db.channel('admin-realtime')
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'reports' },
+          () => loadAllHomes(selectedDate))
+        .subscribe((status) => {
+          const badge = document.getElementById('rt-badge');
+          if (status === 'SUBSCRIBED') {
+            badge.textContent = '🟢 リアルタイム';
+            badge.classList.remove('offline');
+          } else {
+            badge.textContent = '⚠️ 再接続中';
+            badge.classList.add('offline');
+          }
+        });
       buildGhTabsForResidents();
       buildUrlGrid();
     }
@@ -605,10 +608,6 @@
       document.getElementById('modal').style.display = 'none';
     }
 
-    // ─── Realtime ─────────────────────────────────────────
-    const channel = db.channel('admin-realtime')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'reports' },
-        () => loadAllHomes(selectedDate));
 
     // ─── Error ────────────────────────────────────────────
     function showError(msg) {
