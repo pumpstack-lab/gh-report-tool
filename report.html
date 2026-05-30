@@ -324,9 +324,46 @@
       width: 100%;
     }
     .btn-add-shortage:active { background: #e0eeff; }
+
+    /* GH SELECTION SCREEN */
+    .gh-select-screen {
+      position: fixed; inset: 0;
+      background: #2c3e50; z-index: 9999;
+      display: flex; align-items: center; justify-content: center;
+      padding: 24px;
+    }
+    .gh-select-box {
+      background: white; border-radius: 20px;
+      padding: 32px 24px; width: 100%; max-width: 360px;
+      text-align: center; box-shadow: 0 8px 32px rgba(0,0,0,0.3);
+    }
+    .gh-select-box h2 {
+      font-size: 18px; color: #1a2a3a; margin-bottom: 6px;
+    }
+    .gh-select-box p {
+      font-size: 13px; color: #7a8a9a; margin-bottom: 24px;
+    }
+    .gh-select-btns { display: flex; flex-direction: column; gap: 10px; }
+    .gh-select-btn {
+      width: 100%; padding: 14px;
+      background: #f0f6ff; border: 1.5px solid #c0d4f0;
+      border-radius: 12px; font-size: 15px; font-weight: bold;
+      color: #2c3e50; font-family: inherit; cursor: pointer;
+      text-align: left; transition: all 0.12s;
+    }
+    .gh-select-btn:active { background: #4a90d9; color: white; border-color: #4a90d9; }
   </style>
 </head>
 <body>
+
+  <!-- GH Selection Screen -->
+  <div id="gh-select-screen" class="gh-select-screen" style="display:none">
+    <div class="gh-select-box">
+      <h2>🏠 業務日報</h2>
+      <p>担当するホームを選んでください</p>
+      <div class="gh-select-btns" id="gh-select-btns"></div>
+    </div>
+  </div>
 
   <div class="page-header">
     <a href="index.html">←</a>
@@ -398,8 +435,24 @@
     const db = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
     const params = new URLSearchParams(location.search);
-    const ghNum = params.get('gh') || '1';
-    const ghName = GH_NAMES[parseInt(ghNum) - 1] || `ホーム${ghNum}`;
+    const ghNum = params.get('gh');
+    const ghName = ghNum ? (GH_NAMES[parseInt(ghNum) - 1] || `ホーム${ghNum}`) : '';
+
+    // ─── GH Selection Screen ───────────────────────────────
+    if (!ghNum) {
+      const screen = document.getElementById('gh-select-screen');
+      screen.style.display = 'flex';
+      const btnsContainer = document.getElementById('gh-select-btns');
+      GH_NAMES.forEach((name, idx) => {
+        const btn = document.createElement('button');
+        btn.className = 'gh-select-btn';
+        btn.textContent = name;
+        btn.onclick = () => {
+          location.href = `report.html?gh=${idx + 1}`;
+        };
+        btnsContainer.appendChild(btn);
+      });
+    }
     const urlDate = params.get('date');
 
     function todayISO() {
