@@ -370,7 +370,7 @@
         <h3 id="residents-gh-title">—</h3>
         <div class="add-resident-row">
           <input type="text" id="new-resident-name" class="add-resident-input" placeholder="利用者名を入力" maxlength="30">
-          <button class="btn-add-resident" onclick="addResident()">追加</button>
+          <button type="button" class="btn-add-resident" onclick="addResident()">追加</button>
         </div>
         <div class="resident-list" id="resident-list">
           <div class="resident-empty">GHを選択してください</div>
@@ -698,7 +698,7 @@
     }
 
     document.getElementById('new-resident-name').addEventListener('keydown', e => {
-      if (e.key === 'Enter') addResident();
+      if (e.key === 'Enter' && !e.isComposing) addResident();
     });
 
     async function deleteResident(id, ghNum) {
