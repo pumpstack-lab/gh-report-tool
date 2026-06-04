@@ -746,20 +746,24 @@
       document.querySelectorAll('.resident-entry').forEach(entry => {
         const name = entry.dataset.name;
         const prefix = name + 'さん‥';
-        // Word用インデント：text-indentとpaddingで字下げ（&nbspより確実）
         const rawLines = (entry.querySelector('textarea').value || '').split('\n');
         const escapedLines = rawLines.map(l =>
           l.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
         );
-        // 空行は除去して余白を最小化
+        // 空行除去
         const nonEmptyLines = escapedLines.filter((l, i) => i === 0 || l.trim() !== '');
-        const pStyle = `margin:0;padding:0;line-height:1.6;font-family:'MS Gothic','Meiryo',sans-serif;font-size:10.5pt`;
-        const indentPx = `${prefix.length * 10.5}pt`; // 1文字≒10.5pt
-        const firstLine = `<p style="${pStyle}">${prefix}${nonEmptyLines[0] || ''}</p>`;
-        const restLines = nonEmptyLines.slice(1).map(l =>
-          `<p style="${pStyle};padding-left:${indentPx}">${l}</p>`
-        ).join('');
-        entriesHTML += `<div style="margin-bottom:4pt">${firstLine}${restLines}</div>`;
+        // テーブルで名前列と本文列を分けて確実に桁揃え
+        const bodyLines = nonEmptyLines.map((l, i) => {
+          if (i === 0) return l;
+          return `<br>${l}`;
+        }).join('');
+        entriesHTML += `
+        <table style="border:none;width:100%;margin-bottom:2pt;border-collapse:collapse">
+          <tr>
+            <td style="border:none;padding:0;white-space:nowrap;vertical-align:top;font-family:'MS Gothic','Meiryo',sans-serif;font-size:10.5pt;line-height:1.6">${prefix}</td>
+            <td style="border:none;padding:0;vertical-align:top;font-family:'MS Gothic','Meiryo',sans-serif;font-size:10.5pt;line-height:1.6">${bodyLines}</td>
+          </tr>
+        </table>`;
       });
 
       const wordHTML = `<!DOCTYPE html>
@@ -783,9 +787,9 @@
     <td style="text-align:center;font-size:9pt;background:#f5f5f5">報告者</td>
   </tr>
   <tr>
-    <td style="height:44pt">&nbsp;</td>
-    <td style="height:44pt">&nbsp;</td>
-    <td style="height:44pt;font-weight:bold;font-size:11pt">${reporter}</td>
+    <td style="height:24pt">&nbsp;</td>
+    <td style="height:24pt">&nbsp;</td>
+    <td style="height:24pt;font-weight:bold;font-size:11pt">${reporter}</td>
   </tr>
 </table>
 <p style="font-weight:bold;margin-bottom:8pt">【特記事項】</p>
