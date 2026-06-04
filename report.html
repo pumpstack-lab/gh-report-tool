@@ -645,7 +645,9 @@
 
       if (data) {
         reporterEl.value = data.reporter || '';
-        shortageItems = (data.shortage || []).map(item =>
+        const rawS = data.shortage;
+        const shortageArr2 = typeof rawS === 'string' ? JSON.parse(rawS || '[]') : (rawS || []);
+        shortageItems = shortageArr2.map(item =>
           typeof item === 'string'
             ? { text: item, checked: false }
             : { text: item.text || '', checked: !!item.checked }
@@ -859,7 +861,9 @@ ${entriesHTML}
       document.getElementById('existing-badge').textContent = reportData ? '記録あり ✓' : '';
       if (reportData) {
         reporterEl.value = reportData.reporter || '';
-        shortageItems = (reportData.shortage || []).map(item =>
+        const rawShortage = reportData.shortage;
+        const shortageArr = typeof rawShortage === 'string' ? JSON.parse(rawShortage || '[]') : (rawShortage || []);
+        shortageItems = shortageArr.map(item =>
           typeof item === 'string' ? { text: item, checked: false } : { text: item.text || '', checked: !!item.checked }
         );
         renderShortageList();
@@ -878,5 +882,6 @@ ${entriesHTML}
   </script>
 </body>
 </html>
+
 
 
