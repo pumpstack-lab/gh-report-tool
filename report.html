@@ -760,14 +760,10 @@
         // 名前列幅：苗字2文字+全角スペース+名前2文字+「さん‥」3文字 = prefix.length文字 × 11pt
         const nameColWidth = `${prefix.length * 11}pt`;
         entriesHTML += `
-        <table style="border:none;border-collapse:collapse;width:100%;margin-bottom:2pt;table-layout:fixed">
-          <colgroup>
-            <col style="width:${nameColWidth}">
-            <col>
-          </colgroup>
+        <table style="border-collapse:collapse;width:100%;margin-bottom:2pt">
           <tr>
-            <td class="no-border" style="width:${nameColWidth};white-space:nowrap;vertical-align:top;font-family:'MS Gothic','Meiryo',sans-serif;font-size:10.5pt;line-height:1.6">${prefix}</td>
-            <td class="no-border" style="vertical-align:top;font-family:'MS Gothic','Meiryo',sans-serif;font-size:10.5pt;line-height:1.6">${bodyLines}</td>
+            <td style="border:none;padding:0 4pt 0 0;width:${nameColWidth};white-space:nowrap;vertical-align:top;font-family:'MS Gothic','Meiryo',sans-serif;font-size:10.5pt;line-height:1.6">${prefix}</td>
+            <td style="border:none;padding:0;vertical-align:top;font-family:'MS Gothic','Meiryo',sans-serif;font-size:10.5pt;line-height:1.6">${bodyLines}</td>
           </tr>
         </table>`;
       });
@@ -776,13 +772,12 @@
 <html><head><meta charset="UTF-8">
 <style>
   body{font-family:'MS Mincho','MS Gothic','Meiryo',sans-serif;font-size:10.5pt;margin:20pt}
-  table{border-collapse:collapse;width:100%;margin-bottom:14pt}
-  td{border:1pt solid black;padding:6pt;vertical-align:middle}
-  td.no-border{border:none;border-style:none;padding:0}
+  .header-table{border-collapse:collapse;width:100%;margin-bottom:14pt}
+  .header-table td{border:1pt solid black;padding:6pt;vertical-align:middle}
   p{margin:0}
 </style>
 </head><body>
-<table>
+<table class="header-table">
   <tr>
     <td rowspan="2" style="width:32%">
       <p style="font-weight:bold;font-size:12pt;margin-bottom:4pt">報告書</p>
