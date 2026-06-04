@@ -743,20 +743,20 @@
       let entriesHTML = '';
       document.querySelectorAll('.resident-entry').forEach(entry => {
         const name = entry.dataset.name;
-        // 「大庭さん‥」のプレフィックス（苗字 + さん‥）
         const prefix = name + 'さん‥';
-        // 2行目以降のインデント：prefixと同じ文字数の全角スペース
-        const indent = '　'.repeat(prefix.length);
+        // Word用インデント：全角スペースではなく&nbsp;×文字数で確実に揃える
+        const nbsp = '&nbsp;';
+        const indent = nbsp.repeat(prefix.length * 2); // 全角1文字≒半角2文字分
         const rawLines = (entry.querySelector('textarea').value || '').split('\n');
         const escapedLines = rawLines.map(l =>
           l.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
         );
-        // 1行目はprefixの直後、2行目以降はindentでそろえる
-        const formattedLines = escapedLines.map((l, i) =>
-          i === 0 ? prefix + l : indent + l
-        );
-        const formattedText = formattedLines.join('<br>');
-        entriesHTML += `<p style="margin:0 0 10pt;line-height:1.8;font-family:'MS Gothic','Meiryo',monospace;white-space:pre-wrap">${formattedText}</p>`;
+        // 各行を<p>タグで分けてWordに確実に改行させる
+        const firstLine = `<p style="margin:0;line-height:1.8;font-family:'MS Gothic','Meiryo',monospace">${prefix}${escapedLines[0]}</p>`;
+        const restLines = escapedLines.slice(1).map(l =>
+          `<p style="margin:0;line-height:1.8;font-family:'MS Gothic','Meiryo',monospace">${indent}${l}</p>`
+        ).join('');
+        entriesHTML += `<div style="margin-bottom:10pt">${firstLine}${restLines}</div>`;
       });
 
       const wordHTML = `<!DOCTYPE html>
@@ -878,4 +878,5 @@ ${entriesHTML}
   </script>
 </body>
 </html>
+
 
