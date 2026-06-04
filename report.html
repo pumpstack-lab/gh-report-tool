@@ -757,27 +757,27 @@
           if (i === 0) return l;
           return `<br>${l}`;
         }).join('');
-        // 名前列幅：苗字2文字+全角スペース+名前2文字+「さん‥」3文字 = prefix.length文字 × 11pt
-        const nameColWidth = `${prefix.length * 11}pt`;
-        entriesHTML += `
-        <table style="border-collapse:collapse;width:100%;margin-bottom:2pt">
-          <tr>
-            <td style="border:none;padding:0 4pt 0 0;width:${nameColWidth};white-space:nowrap;vertical-align:top;font-family:'MS Gothic','Meiryo',sans-serif;font-size:10.5pt;line-height:1.6">${prefix}</td>
-            <td style="border:none;padding:0;vertical-align:top;font-family:'MS Gothic','Meiryo',sans-serif;font-size:10.5pt;line-height:1.6">${bodyLines}</td>
-          </tr>
-        </table>`;
+        // 全角スペースでインデント（html-docx-jsで最も確実な方法）
+        const zenkakuIndent = '　'.repeat(prefix.length);
+        const allLines = nonEmptyLines.map((l, i) =>
+          i === 0 ? prefix + l : zenkakuIndent + l
+        );
+        const pStyle = `margin:0 0 0 0;padding:0;line-height:1.6;font-family:'MS Gothic','Meiryo',sans-serif;font-size:10.5pt`;
+        entriesHTML += allLines.map(l =>
+          `<p style="${pStyle}">${l}</p>`
+        ).join('') + `<p style="margin:0;line-height:0.5">&nbsp;</p>`;
       });
 
       const wordHTML = `<!DOCTYPE html>
 <html><head><meta charset="UTF-8">
 <style>
   body{font-family:'MS Mincho','MS Gothic','Meiryo',sans-serif;font-size:10.5pt;margin:20pt}
-  .header-table{border-collapse:collapse;width:100%;margin-bottom:14pt}
-  .header-table td{border:1pt solid black;padding:6pt;vertical-align:middle}
+  table{border-collapse:collapse;width:100%;margin-bottom:14pt}
+  td{border:1pt solid black;padding:6pt;vertical-align:middle}
   p{margin:0}
 </style>
 </head><body>
-<table class="header-table">
+<table>
   <tr>
     <td rowspan="2" style="width:32%">
       <p style="font-weight:bold;font-size:12pt;margin-bottom:4pt">報告書</p>
