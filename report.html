@@ -746,19 +746,20 @@
       document.querySelectorAll('.resident-entry').forEach(entry => {
         const name = entry.dataset.name;
         const prefix = name + 'さん‥';
-        // Word用インデント：全角スペースではなく&nbsp;×文字数で確実に揃える
-        const nbsp = '&nbsp;';
-        const indent = nbsp.repeat(prefix.length * 2); // 全角1文字≒半角2文字分
+        // Word用インデント：text-indentとpaddingで字下げ（&nbspより確実）
         const rawLines = (entry.querySelector('textarea').value || '').split('\n');
         const escapedLines = rawLines.map(l =>
           l.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
         );
-        // 各行を<p>タグで分けてWordに確実に改行させる
-        const firstLine = `<p style="margin:0;line-height:1.8;font-family:'MS Gothic','Meiryo',monospace">${prefix}${escapedLines[0]}</p>`;
-        const restLines = escapedLines.slice(1).map(l =>
-          `<p style="margin:0;line-height:1.8;font-family:'MS Gothic','Meiryo',monospace">${indent}${l}</p>`
+        // 空行は除去して余白を最小化
+        const nonEmptyLines = escapedLines.filter((l, i) => i === 0 || l.trim() !== '');
+        const pStyle = `margin:0;padding:0;line-height:1.6;font-family:'MS Gothic','Meiryo',sans-serif;font-size:10.5pt`;
+        const indentPx = `${prefix.length * 10.5}pt`; // 1文字≒10.5pt
+        const firstLine = `<p style="${pStyle}">${prefix}${nonEmptyLines[0] || ''}</p>`;
+        const restLines = nonEmptyLines.slice(1).map(l =>
+          `<p style="${pStyle};padding-left:${indentPx}">${l}</p>`
         ).join('');
-        entriesHTML += `<div style="margin-bottom:10pt">${firstLine}${restLines}</div>`;
+        entriesHTML += `<div style="margin-bottom:4pt">${firstLine}${restLines}</div>`;
       });
 
       const wordHTML = `<!DOCTYPE html>
