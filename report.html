@@ -742,96 +742,92 @@
     }
 
     // ─── Word Export ──────────────────────────────────────
-    async function exportWord() {
-      try { await loadWordLibs(); } catch(e) { alert('Word出力ライブラリの読み込みに失敗しました'); return; }
-      saveCurrentData();
-      const reporter = reporterEl.value || '';
-      const dateStr = getReiwaDate(dateEl.value);
-
-      let entriesHTML = '';
-      document.querySelectorAll('.resident-entry').forEach(entry => {
-        const name = entry.dataset.name;
-        const prefix = name + 'さん‥';
-        const rawLines = (entry.querySelector('textarea').value || '').split('\n');
-        const escapedLines = rawLines.map(l =>
-          l.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
-        );
-        // 空行除去
-        const nonEmptyLines = escapedLines.filter((l, i) => i === 0 || l.trim() !== '');
-        // テーブルで名前列と本文列を分けて確実に桁揃え
-        const bodyLines = nonEmptyLines.map((l, i) => {
-          if (i === 0) return l;
-          return `<br>${l}`;
-        }).join('');
-        // 全角スペースでインデント（html-docx-jsで最も確実な方法）
-        const zenkakuIndent = '　'.repeat(prefix.length);
-        const allLines = nonEmptyLines.map((l, i) =>
-          i === 0 ? prefix + l : zenkakuIndent + l
-        );
-        const pStyle = `margin:0 0 0 0;padding:0;line-height:1.6;font-family:'MS Gothic','Meiryo',sans-serif;font-size:10.5pt`;
-        entriesHTML += allLines.map(l =>
-          `<p style="${pStyle}">${l}</p>`
-        ).join('') + `<p style="margin:0;line-height:0.5">&nbsp;</p>`;
-      });
-
-      const wordHTML = `<!DOCTYPE html>
-<html><head><meta charset="UTF-8">
-<style>
-  body{font-family:'MS Mincho','MS Gothic','Meiryo',sans-serif;font-size:10.5pt;margin:20pt}
-  table{border-collapse:collapse;width:100%;margin-bottom:14pt}
-  td{border:1pt solid black;padding:6pt;vertical-align:middle}
-  p{margin:0}
-</style>
-</head><body>
-<table>
-  <tr>
-    <td rowspan="2" style="width:32%">
-      <p style="font-weight:bold;font-size:12pt;margin-bottom:4pt">報告書</p>
-      <p style="font-size:10pt">${dateStr}</p>
-    </td>
-    <td rowspan="2" style="text-align:center;font-size:16pt;font-weight:bold;width:28%">${ghName}</td>
-    <td style="text-align:center;font-size:9pt;background:#f5f5f5">管理者</td>
-    <td style="text-align:center;font-size:9pt;background:#f5f5f5">サービス管理責任者</td>
-    <td style="text-align:center;font-size:9pt;background:#f5f5f5">報告者</td>
-  </tr>
-  <tr>
-    <td style="height:24pt">&nbsp;</td>
-    <td style="height:24pt">&nbsp;</td>
-    <td style="height:24pt;font-weight:bold;font-size:11pt">${reporter}</td>
-  </tr>
-</table>
-<p style="font-weight:bold;margin-bottom:8pt">【特記事項】</p>
-${entriesHTML}
-</body></html>`;
-
-      try {
-        const blob = htmlDocx.asBlob(wordHTML);
-        const dateNum = dateEl.value.replace(/-/g,'');
-        const safeName = ghName.replace(/[^　-鿿＀-￯゠-ヿa-zA-Z0-9]/g,'');
-        saveAs(blob, `${safeName}_業務日報_${dateNum}.docx`);
-      } catch(e) {
-        alert('Word出力に失敗しました。\n' + e);
-      }
-    }
-
-    // ─── Word libs (lazy load on first use) ──────────────
     let wordLibsLoaded = false;
     function loadWordLibs() {
       if (wordLibsLoaded) return Promise.resolve();
-      return Promise.all([
-        new Promise((res, rej) => {
-          const s = document.createElement('script');
-          s.src = 'https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js';
-          s.onload = res; s.onerror = rej;
-          document.head.appendChild(s);
+      return new Promise((res, rej) => {
+        const s = document.createElement('script');
+        s.src = 'https://unpkg.com/docx@9.7.1/dist/index.umd.cjs';
+        s.onload = () => { wordLibsLoaded = true; res(); };
+        s.onerror = rej;
+        document.head.appendChild(s);
+      });
+    }
+
+    async function exportWord() {
+      try { await loadWordLibs(); } catch(e) { alert('Word出力ライブラリの読み込みに失敗しました'); return; }
+      saveCurrentData();
+
+      const reporter = reporterEl.value || '';
+      const dateStr = getReiwaDate(dateEl.value);
+      const dateNum = dateEl.value.replace(/-/g,'');
+      const safeName = ghName.replace(/[^　-鿿豈-﫿゠-ヿa-zA-Z0-9]/g,'');
+
+      const { Document, Paragraph, TextRun, AlignmentType, HeadingLevel, Packer, BorderStyle, TableRow, TableCell, Table, WidthType } = docx;
+
+      const FONT = 'MS Gothic';
+      const pt = n => n * 2; // docx uses half-points
+
+      // ヘッダー段落
+      const headerParas = [
+        new Paragraph({
+          children: [new TextRun({ text: '業務日報', bold: true, size: pt(16), font: FONT })],
+          alignment: AlignmentType.CENTER,
+          spacing: { after: 80 },
         }),
-        new Promise((res, rej) => {
-          const s = document.createElement('script');
-          s.src = 'https://unpkg.com/html-docx-js@0.3.1/dist/html-docx.js';
-          s.onload = res; s.onerror = rej;
-          document.head.appendChild(s);
-        })
-      ]).then(() => { wordLibsLoaded = true; });
+        new Paragraph({
+          children: [
+            new TextRun({ text: `日付：${dateStr}　`, size: pt(11), font: FONT }),
+            new TextRun({ text: `ホーム：${ghName}　`, size: pt(11), font: FONT }),
+            new TextRun({ text: `報告者：${reporter}`, size: pt(11), font: FONT }),
+          ],
+          spacing: { after: 80 },
+        }),
+        new Paragraph({
+          children: [new TextRun({ text: '管理者：　　　　　　　サービス管理責任者：', size: pt(11), font: FONT })],
+          spacing: { after: 200 },
+        }),
+        new Paragraph({
+          children: [new TextRun({ text: '【特記事項】', bold: true, size: pt(11), font: FONT })],
+          spacing: { after: 80 },
+        }),
+      ];
+
+      // 利用者ごとの段落
+      const entryParas = [];
+      document.querySelectorAll('.resident-entry').forEach(entry => {
+        const name = entry.dataset.name;
+        const prefix = `${name}さん‥`;
+        const indent = '　'.repeat(prefix.length);
+        const lines = (entry.querySelector('textarea').value || '').split('\n').filter((l, i) => i === 0 || l.trim() !== '');
+
+        lines.forEach((line, i) => {
+          entryParas.push(new Paragraph({
+            children: [new TextRun({ text: (i === 0 ? prefix : indent) + line, size: pt(10.5), font: FONT })],
+            spacing: { before: 0, after: 0 },
+          }));
+        });
+        // 利用者間の空行
+        entryParas.push(new Paragraph({ children: [new TextRun({ text: '' })], spacing: { after: 60 } }));
+      });
+
+      const doc = new Document({
+        sections: [{
+          properties: {},
+          children: [...headerParas, ...entryParas],
+        }],
+      });
+
+      try {
+        const blob = await Packer.toBlob(doc);
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = `${safeName}_業務日報_${dateNum}.docx`;
+        a.click();
+        URL.revokeObjectURL(a.href);
+      } catch(e) {
+        alert('Word出力に失敗しました。\n' + e);
+      }
     }
 
     // ─── Init (parallel fetch) ────────────────────────────
