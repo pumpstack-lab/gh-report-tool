@@ -540,28 +540,38 @@
       });
     }
 
-    document.getElementById('photo-input').addEventListener('change', async (e) => {
-      const files = Array.from(e.target.files);
-      e.target.value = '';
-      const remaining = 2 - uploadedPhotos.length;
-      if (remaining <= 0) return;
-      const toUpload = files.slice(0, remaining);
+    function bindPhotoInput() {
+      const input = document.getElementById('photo-input');
+      input.addEventListener('change', async (e) => {
+        const files = Array.from(e.target.files);
+        // inputを即リセット（iOSで同じファイルを再選択できるように）
+        e.target.value = '';
 
-      const ind = document.getElementById('photo-uploading');
-      ind.textContent = 'アップロード中...';
+        const remaining = 2 - uploadedPhotos.length;
+        if (!files.length || remaining <= 0) return;
+        const toUpload = files.slice(0, remaining);
 
-      for (const file of toUpload) {
-        const compressed = await compressImage(file);
-        const path = `gh${ghNum}/${dateEl.value}/${Date.now()}.jpg`;
-        const { error } = await storage.from('report-photos').upload(path, compressed, { contentType: 'image/jpeg', upsert: false });
-        if (error) { ind.textContent = '⚠️ アップロード失敗: ' + error.message; continue; }
-        const { data } = storage.from('report-photos').getPublicUrl(path);
-        uploadedPhotos.push({ url: data.publicUrl, path });
-      }
-      ind.textContent = '';
-      renderPhotoPreview();
-      scheduleAutoSave();
-    });
+        const ind = document.getElementById('photo-uploading');
+        ind.textContent = 'アップロード中...';
+
+        for (const file of toUpload) {
+          const compressed = await compressImage(file);
+          const path = `gh${ghNum}/${dateEl.value}/${Date.now()}.jpg`;
+          const { error } = await storage.from('report-photos').upload(path, compressed, { contentType: 'image/jpeg', upsert: false });
+          if (error) {
+            ind.style.color = '#e74c3c';
+            ind.textContent = '⚠️ アップロード失敗: ' + error.message;
+            setTimeout(() => { ind.textContent = ''; ind.style.color = ''; }, 4000);
+            continue;
+          }
+          const { data } = storage.from('report-photos').getPublicUrl(path);
+          uploadedPhotos.push({ url: data.publicUrl, path });
+        }
+        ind.textContent = '';
+        renderPhotoPreview();
+        scheduleAutoSave();
+      });
+    }
 
     const params = new URLSearchParams(location.search);
     const ghNum = params.get('gh');
@@ -1027,6 +1037,7 @@
         renderPhotoPreview();
       }
     }
+    bindPhotoInput();
     init();
   </script>
 </body>
