@@ -604,11 +604,19 @@
       }
       document.getElementById('modal-body').innerHTML = html;
       document.getElementById('modal').style.display = 'flex';
+      history.pushState({ modal: true }, '');
     }
 
     function closeModal() {
       document.getElementById('modal').style.display = 'none';
+      if (history.state && history.state.modal) history.back();
     }
+
+    window.addEventListener('popstate', () => {
+      if (document.getElementById('modal').style.display !== 'none') {
+        document.getElementById('modal').style.display = 'none';
+      }
+    });
 
 
     // ─── Error ────────────────────────────────────────────
