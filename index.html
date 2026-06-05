@@ -224,29 +224,39 @@
       } catch(e) { indexDateEl.focus(); }
     });
 
+    const { createClient } = supabase;
+    const db = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+    function updateBadges(dateStr) {
+      // バッジをいったん全リセット
+      for (let i = 1; i <= 6; i++) {
+        const badge = document.getElementById(`badge${i}`);
+        if (badge) { badge.textContent = ''; }
+      }
+      db.from('reports')
+        .select('gh_num')
+        .eq('report_date', dateStr)
+        .then(({ data }) => {
+          if (!data) return;
+          data.forEach(r => {
+            const badge = document.getElementById(`badge${r.gh_num}`);
+            if (badge) {
+              badge.textContent = dateStr === todayISO() ? '本日記録あり ✓' : '記録あり ✓';
+              badge.style.color = '#2ecc71';
+            }
+          });
+        });
+    }
+
     indexDateEl.addEventListener('change', () => {
       selectedDate = indexDateEl.value;
       document.getElementById('today').textContent = formatDate(selectedDate);
       updateGHLinks(selectedDate);
+      updateBadges(selectedDate);
     });
 
-    // Show today's record badge per GH (from Supabase)
-    const todayStr = todayISO();
-    const { createClient } = supabase;
-    const db = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-    db.from('reports')
-      .select('gh_num')
-      .eq('report_date', todayStr)
-      .then(({ data }) => {
-        if (!data) return;
-        data.forEach(r => {
-          const badge = document.getElementById(`badge${r.gh_num}`);
-          if (badge) {
-            badge.textContent = '本日記録あり ✓';
-            badge.style.color = '#2ecc71';
-          }
-        });
-      });
+    // 初期表示：今日のバッジ
+    updateBadges(selectedDate);
   </script>
 </body>
 </html>

@@ -469,6 +469,8 @@
 
     const dateEl = document.getElementById('report-date');
     dateEl.value = urlDate || todayISO();
+    let previousDate = dateEl.value;
+    let saveTimer = null;
     refreshDateDisplay();
 
     document.getElementById('date-card-section').addEventListener('click', () => {
@@ -479,7 +481,9 @@
     });
 
     dateEl.addEventListener('change', async () => {
-      await saveCurrentData();
+      clearTimeout(saveTimer);
+      await saveCurrentDataForDate(previousDate);
+      previousDate = dateEl.value;
       refreshDateDisplay();
       await loadDateData(dateEl.value);
     });
@@ -591,14 +595,16 @@
     });
 
     // ─── Auto-save ────────────────────────────────────────
-    let saveTimer = null;
     function scheduleAutoSave() {
       clearTimeout(saveTimer);
       saveTimer = setTimeout(saveCurrentData, 800);
     }
 
     async function saveCurrentData() {
-      const dateISO = dateEl.value;
+      return saveCurrentDataForDate(dateEl.value);
+    }
+
+    async function saveCurrentDataForDate(dateISO) {
       const reporter = reporterEl.value.trim();
       const shortageData = shortageItems
         .filter(item => item.text.trim())
