@@ -323,6 +323,54 @@
     }
     .btn-add-shortage:active { background: #e0eeff; }
 
+    /* PHOTO UPLOAD */
+    .photo-upload-area {
+      border: 2px dashed #c0d4f0;
+      border-radius: 12px;
+      padding: 20px;
+      text-align: center;
+      cursor: pointer;
+      background: #f8fbff;
+      transition: border-color 0.2s;
+      margin-bottom: 14px;
+    }
+    .photo-upload-area:active { border-color: #4a90d9; background: #eef6ff; }
+    .photo-upload-area p { font-size: 14px; color: #7a8a9a; margin-top: 8px; }
+    .photo-upload-icon { font-size: 36px; }
+    #photo-input { display: none; }
+    .photo-preview-row {
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    .photo-thumb-wrap {
+      position: relative;
+      width: calc(50% - 6px);
+    }
+    .photo-thumb-wrap img {
+      width: 100%;
+      aspect-ratio: 4/3;
+      object-fit: cover;
+      border-radius: 10px;
+      display: block;
+    }
+    .btn-remove-photo {
+      position: absolute;
+      top: 6px; right: 6px;
+      width: 26px; height: 26px;
+      background: rgba(0,0,0,0.55);
+      color: white;
+      border: none;
+      border-radius: 50%;
+      font-size: 14px;
+      cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .photo-uploading {
+      font-size: 12px; color: #4a90d9;
+      text-align: center; padding: 6px 0;
+    }
+
     /* GH SELECTION SCREEN */
     .gh-select-screen {
       position: fixed; inset: 0;
@@ -401,6 +449,17 @@
     <button type="button" class="btn-add-shortage" id="btn-add-shortage">＋ 項目を追加</button>
   </div>
 
+  <div class="section">
+    <div class="section-label">【写真】</div>
+    <div class="photo-upload-area" id="photo-upload-area" onclick="document.getElementById('photo-input').click()">
+      <div class="photo-upload-icon">📷</div>
+      <p>タップして写真を追加（最大2枚）</p>
+    </div>
+    <input type="file" id="photo-input" accept="image/*" multiple>
+    <div class="photo-preview-row" id="photo-preview-row"></div>
+    <div class="photo-uploading" id="photo-uploading"></div>
+  </div>
+
   <div class="draft-indicator" id="draft-indicator"></div>
 
   <div class="bottom-bar">
@@ -431,6 +490,78 @@
 
     const { createClient } = supabase;
     const db = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+    const storage = db.storage;
+
+    // ─── Photo state ──────────────────────────────────────
+    let uploadedPhotos = []; // [{url, path}]
+
+    function renderPhotoPreview() {
+      const row = document.getElementById('photo-preview-row');
+      const area = document.getElementById('photo-upload-area');
+      row.innerHTML = '';
+      uploadedPhotos.forEach((photo, idx) => {
+        const wrap = document.createElement('div');
+        wrap.className = 'photo-thumb-wrap';
+        wrap.innerHTML = `
+          <img src="${photo.url}" loading="lazy">
+          <button class="btn-remove-photo" onclick="removePhoto(${idx})">✕</button>
+        `;
+        row.appendChild(wrap);
+      });
+      area.style.display = uploadedPhotos.length >= 2 ? 'none' : '';
+    }
+
+    async function removePhoto(idx) {
+      const photo = uploadedPhotos[idx];
+      await storage.from('report-photos').remove([photo.path]);
+      uploadedPhotos.splice(idx, 1);
+      renderPhotoPreview();
+      scheduleAutoSave();
+    }
+
+    async function compressImage(file) {
+      return new Promise(resolve => {
+        const img = new Image();
+        const url = URL.createObjectURL(file);
+        img.onload = () => {
+          const MAX = 800;
+          let w = img.width, h = img.height;
+          if (w > MAX || h > MAX) {
+            if (w > h) { h = Math.round(h * MAX / w); w = MAX; }
+            else { w = Math.round(w * MAX / h); h = MAX; }
+          }
+          const canvas = document.createElement('canvas');
+          canvas.width = w; canvas.height = h;
+          canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+          URL.revokeObjectURL(url);
+          canvas.toBlob(blob => resolve(blob), 'image/jpeg', 0.75);
+        };
+        img.src = url;
+      });
+    }
+
+    document.getElementById('photo-input').addEventListener('change', async (e) => {
+      const files = Array.from(e.target.files);
+      e.target.value = '';
+      const remaining = 2 - uploadedPhotos.length;
+      if (remaining <= 0) return;
+      const toUpload = files.slice(0, remaining);
+
+      const ind = document.getElementById('photo-uploading');
+      ind.textContent = 'アップロード中...';
+
+      for (const file of toUpload) {
+        const compressed = await compressImage(file);
+        const path = `gh${ghNum}/${dateEl.value}/${Date.now()}.jpg`;
+        const { error } = await storage.from('report-photos').upload(path, compressed, { contentType: 'image/jpeg', upsert: false });
+        if (error) { ind.textContent = '⚠️ アップロード失敗: ' + error.message; continue; }
+        const { data } = storage.from('report-photos').getPublicUrl(path);
+        uploadedPhotos.push({ url: data.publicUrl, path });
+      }
+      ind.textContent = '';
+      renderPhotoPreview();
+      scheduleAutoSave();
+    });
 
     const params = new URLSearchParams(location.search);
     const ghNum = params.get('gh');
@@ -610,7 +741,7 @@
         .filter(item => item.text.trim())
         .map(item => ({ text: item.text.trim(), checked: item.checked || false }));
       const residentsData = {};
-      let hasContent = !!reporter || shortageData.length > 0;
+      let hasContent = !!reporter || shortageData.length > 0 || uploadedPhotos.length > 0;
       document.querySelectorAll('.resident-entry').forEach(entry => {
         const val = entry.querySelector('textarea').value;
         residentsData[entry.dataset.name] = val;
@@ -626,6 +757,7 @@
         reporter: reporter,
         residents: residentsData,
         shortage: shortageData,
+        photos: uploadedPhotos.map(p => ({ url: p.url, path: p.path })),
         updated_at: new Date().toISOString()
       }, { onConflict: 'gh_num,report_date' });
 
@@ -664,6 +796,8 @@
           ta.value = (data.residents || {})[entry.dataset.name] || '';
           autoExpand(ta);
         });
+        uploadedPhotos = (data.photos || []).map(p => ({ url: p.url, path: p.path }));
+        renderPhotoPreview();
       } else {
         reporterEl.value = localStorage.getItem('lastReporter') || '';
         shortageItems = [];
@@ -672,6 +806,8 @@
           ta.value = '';
           ta.style.height = '';
         });
+        uploadedPhotos = [];
+        renderPhotoPreview();
       }
     }
 
@@ -881,10 +1017,14 @@
           ta.value = (reportData.residents || {})[entry.dataset.name] || '';
           autoExpand(ta);
         });
+        uploadedPhotos = (reportData.photos || []).map(p => ({ url: p.url, path: p.path }));
+        renderPhotoPreview();
       } else {
         reporterEl.value = localStorage.getItem('lastReporter') || '';
         shortageItems = [];
         renderShortageList();
+        uploadedPhotos = [];
+        renderPhotoPreview();
       }
     }
     init();

@@ -197,6 +197,25 @@
       background: #f9f9f9; padding: 10px 14px; border-radius: 8px;
     }
     .d-empty { color: #999; font-size: 13px; text-align: center; padding: 20px; }
+    .d-photos { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 16px; }
+    .d-photos img {
+      width: calc(50% - 5px); aspect-ratio: 4/3;
+      object-fit: cover; border-radius: 10px;
+      cursor: pointer; border: 2px solid #eee;
+    }
+    .d-photos img:active { opacity: 0.8; }
+    .photo-lightbox {
+      position: fixed; inset: 0;
+      background: rgba(0,0,0,0.9);
+      z-index: 999; display: flex;
+      align-items: center; justify-content: center;
+    }
+    .photo-lightbox img { max-width: 95vw; max-height: 90vh; border-radius: 8px; }
+    .photo-lightbox-close {
+      position: absolute; top: 16px; right: 16px;
+      color: white; font-size: 32px; cursor: pointer;
+      background: none; border: none; line-height: 1;
+    }
 
     /* ERROR */
     .error-msg {
@@ -602,9 +621,28 @@
           html += `<div style="font-size:13px;padding:4px 0;${item.checked ? 'text-decoration:line-through;color:#aaa' : 'color:#7a5a00'}">${item.checked ? '☑' : '☐'} ${item.text}</div>`;
         });
       }
+      // 写真
+      const photos = Array.isArray(report.photos) ? report.photos : [];
+      if (photos.length > 0) {
+        html += `<div style="margin-top:16px;font-weight:bold;font-size:13px;color:#4a90d9">【写真】</div>`;
+        html += `<div class="d-photos">`;
+        photos.forEach(p => {
+          html += `<img src="${p.url}" loading="lazy" onclick="openLightbox('${p.url}')">`;
+        });
+        html += `</div>`;
+      }
+
       document.getElementById('modal-body').innerHTML = html;
       document.getElementById('modal').style.display = 'flex';
       history.pushState({ modal: true }, '');
+    }
+
+    function openLightbox(url) {
+      const lb = document.createElement('div');
+      lb.className = 'photo-lightbox';
+      lb.innerHTML = `<img src="${url}"><button class="photo-lightbox-close" onclick="this.parentNode.remove()">✕</button>`;
+      lb.addEventListener('click', e => { if (e.target === lb) lb.remove(); });
+      document.body.appendChild(lb);
     }
 
     function closeModal() {
