@@ -444,10 +444,12 @@
     }
 
     // ─── Password Gate ────────────────────────────────────
+    const AUTH_KEY = 'gh_admin_auth';
+
     function checkPassword() {
       const v = document.getElementById('pw-input').value;
       if (v === ADMIN_PASSWORD) {
-        sessionStorage.setItem('admin_auth', '1');
+        localStorage.setItem(AUTH_KEY, '1');
         document.getElementById('pw-gate').style.display = 'none';
         initDashboard();
       } else {
@@ -459,7 +461,7 @@
     document.getElementById('pw-input').addEventListener('keydown', e => {
       if (e.key === 'Enter') checkPassword();
     });
-    if (sessionStorage.getItem('admin_auth') === '1') {
+    if (localStorage.getItem(AUTH_KEY) === '1') {
       document.getElementById('pw-gate').style.display = 'none';
       initDashboard();
     }
