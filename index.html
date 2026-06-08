@@ -219,12 +219,7 @@
     document.getElementById('today').textContent = formatDate(selectedDate);
     updateGHLinks(selectedDate);
 
-    // input自体のclickはstopPropagation（date-wrapとの二重発火防止）
-    // date-wrapクリック → showPicker() でカレンダーを開く
-    indexDateEl.addEventListener('click', (e) => { e.stopPropagation(); });
-    document.getElementById('date-wrap').addEventListener('click', () => {
-      indexDateEl.showPicker();
-    });
+    // inputがdiv上に重なっているためPC/iOS両方でinputへの直接クリックで開く
 
     const { createClient } = supabase;
     const db = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
