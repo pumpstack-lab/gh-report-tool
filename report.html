@@ -618,7 +618,10 @@
     let saveTimer = null;
     refreshDateDisplay();
 
-    // input type=date がdivの上に重なっているので直接タップで開く（iOS対応）
+    // iOS: input が上に重なってタップで開く / PC: showPicker() で明示的に開く
+    document.getElementById('date-card-section').addEventListener('click', () => {
+      try { dateEl.showPicker(); } catch(e) { /* iOS等showPicker非対応は無視 */ }
+    });
 
     dateEl.addEventListener('change', async () => {
       clearTimeout(saveTimer);
