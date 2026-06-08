@@ -64,20 +64,26 @@
     .tab-bar {
       display: flex;
       gap: 0;
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+      scrollbar-width: none;
     }
+    .tab-bar::-webkit-scrollbar { display: none; }
     .tab-btn {
       flex: 1;
-      padding: 10px 8px;
+      min-width: 72px;
+      padding: 10px 6px;
       background: none;
       border: none;
       color: rgba(255,255,255,0.6);
-      font-size: 13px;
+      font-size: 12px;
       font-weight: bold;
       font-family: inherit;
       cursor: pointer;
       border-bottom: 3px solid transparent;
       transition: all 0.15s;
       text-align: center;
+      white-space: nowrap;
     }
     .tab-btn.active {
       color: white;
@@ -300,6 +306,46 @@
     .btn-copy.copied { background: #e8faf0; border-color: #2ecc71; color: #2ecc71; }
     .url-qr img { width: 96px; height: 96px; border-radius: 8px; display: block; }
 
+    /* ── SHORTAGE TAB ── */
+    .shortage-summary-card {
+      background: white; border-radius: 12px; padding: 16px;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.06); margin-bottom: 14px;
+      border-left: 4px solid #f39c12;
+    }
+    .shortage-summary-card.no-shortage { border-left-color: #2ecc71; }
+    .shortage-summary-gh-name {
+      font-size: 14px; font-weight: bold; color: #1a2a3a; margin-bottom: 10px;
+      display: flex; align-items: center; gap: 8px;
+    }
+    .shortage-count-badge {
+      font-size: 11px; font-weight: bold;
+      background: #fff3e0; color: #f39c12;
+      padding: 2px 8px; border-radius: 10px;
+    }
+    .shortage-count-badge.zero {
+      background: #e8faf0; color: #2ecc71;
+    }
+    .shortage-all-clear {
+      font-size: 13px; color: #2ecc71; padding: 4px 0;
+    }
+    .shortage-summary-item {
+      display: flex; align-items: center; gap: 8px;
+      padding: 5px 0; font-size: 13px; color: #7a5a00;
+      border-bottom: 1px solid #fef3e2;
+    }
+    .shortage-summary-item:last-child { border-bottom: none; }
+    .shortage-summary-item.checked { color: #aaa; }
+    .shortage-summary-item.checked .ss-text { text-decoration: line-through; }
+    .ss-text { flex: 1; line-height: 1.4; }
+    .ss-checkbox {
+      width: 16px; height: 16px; cursor: pointer;
+      flex-shrink: 0; accent-color: #2ecc71;
+    }
+    .shortage-tab-empty {
+      text-align: center; padding: 40px 20px;
+      color: #aaa; font-size: 14px;
+    }
+
     /* PASSWORD GATE */
     .pw-gate {
       position: fixed; inset: 0;
@@ -354,9 +400,10 @@
       <span class="date-formatted" id="date-formatted"></span>
     </div>
     <div class="tab-bar">
-      <button class="tab-btn active" onclick="switchTab('reports')">📋 日報確認</button>
-      <button class="tab-btn" onclick="switchTab('residents')">👤 入居者管理</button>
-      <button class="tab-btn" onclick="switchTab('urls')">🔗 スタッフURL</button>
+      <button class="tab-btn active" onclick="switchTab(this,'reports')">📋 日報確認</button>
+      <button class="tab-btn" onclick="switchTab(this,'shortage')">⚠️ 不足品</button>
+      <button class="tab-btn" onclick="switchTab(this,'residents')">👤 入居者管理</button>
+      <button class="tab-btn" onclick="switchTab(this,'urls')">🔗 スタッフURL</button>
     </div>
   </div>
 
@@ -375,6 +422,15 @@
         </div>
       </div>
       <div class="gh-grid" id="gh-grid"></div>
+    </div>
+  </div>
+
+  <!-- Tab: 不足品確認 -->
+  <div id="tab-shortage" class="tab-pane">
+    <div class="content">
+      <div id="shortage-list-area">
+        <div class="shortage-tab-empty">読み込み中...</div>
+      </div>
     </div>
   </div>
 
@@ -451,15 +507,93 @@
       selectedDate = adminDateEl.value;
       document.getElementById('date-formatted').textContent = getReiwaDate(selectedDate);
       loadAllHomes(selectedDate);
+      if (document.getElementById('tab-shortage').classList.contains('active')) {
+        loadShortageTab(selectedDate);
+      }
     });
 
     // ─── Tab Switching ─────────────────────────────────────
-    function switchTab(name) {
+    function switchTab(btn, name) {
       document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
       document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
       document.getElementById(`tab-${name}`).classList.add('active');
-      event.target.classList.add('active');
-      document.getElementById('date-bar').style.display = (name === 'reports') ? 'flex' : 'none';
+      btn.classList.add('active');
+      const showDate = name === 'reports' || name === 'shortage';
+      document.getElementById('date-bar').style.display = showDate ? 'flex' : 'none';
+      if (name === 'shortage') loadShortageTab(selectedDate);
+    }
+
+    // ─── Shortage Tab ──────────────────────────────────────
+    const GH_NAMES_ADMIN = [
+      'こもれびホーム３−２', 'こもれびホーム４', 'こもれびホーム５−１',
+      'こもれびホーム５−２', 'こもれびホーム６', 'こもれびホームマハロ'
+    ];
+
+    async function loadShortageTab(dateISO) {
+      const area = document.getElementById('shortage-list-area');
+      area.innerHTML = '<div class="shortage-tab-empty">読み込み中...</div>';
+      const { data, error } = await db.from('reports').select('gh_num,shortage').eq('report_date', dateISO).order('gh_num');
+      if (error) { area.innerHTML = '<div class="shortage-tab-empty">読み込みに失敗しました</div>'; return; }
+
+      const reportMap = {};
+      (data || []).forEach(r => {
+        const raw = r.shortage;
+        try {
+          reportMap[r.gh_num] = typeof raw === 'string' ? JSON.parse(raw || '[]') : (raw || []);
+        } catch(e) {
+          reportMap[r.gh_num] = [];
+        }
+      });
+
+      let hasAny = false;
+      area.innerHTML = '';
+      GH_NAMES_ADMIN.forEach((name, idx) => {
+        const ghNum = idx + 1;
+        const items = Array.isArray(reportMap[ghNum]) ? reportMap[ghNum].filter(i => i.text && i.text.trim()) : [];
+        if (items.length > 0) hasAny = true;
+
+        const card = document.createElement('div');
+        card.className = `shortage-summary-card${items.length === 0 ? ' no-shortage' : ''}`;
+
+        const countBadge = `<span class="shortage-count-badge${items.length === 0 ? ' zero' : ''}">${items.length === 0 ? '不足なし' : items.length + '件'}</span>`;
+        card.innerHTML = `<div class="shortage-summary-gh-name">${name}${countBadge}</div>`;
+
+        if (items.length === 0) {
+          card.innerHTML += '<div class="shortage-all-clear">✓ 不足品なし</div>';
+        } else {
+          items.forEach((item, itemIdx) => {
+            const row = document.createElement('div');
+            row.className = `shortage-summary-item${item.checked ? ' checked' : ''}`;
+            const cb = document.createElement('input');
+            cb.type = 'checkbox';
+            cb.className = 'ss-checkbox';
+            cb.checked = !!item.checked;
+            cb.addEventListener('change', async () => {
+              const newChecked = cb.checked;
+              row.className = `shortage-summary-item${newChecked ? ' checked' : ''}`;
+              const allItems = Array.isArray(reportMap[ghNum]) ? [...reportMap[ghNum]] : [];
+              const target = allItems.filter(i => i.text && i.text.trim())[itemIdx];
+              if (target) {
+                const globalIdx = allItems.indexOf(target);
+                allItems[globalIdx] = { ...target, checked: newChecked };
+                await db.from('reports').update({ shortage: allItems }).eq('gh_num', ghNum).eq('report_date', dateISO);
+                reportMap[ghNum] = allItems;
+              }
+            });
+            const label = document.createElement('span');
+            label.className = 'ss-text';
+            label.textContent = item.text;
+            row.appendChild(cb);
+            row.appendChild(label);
+            card.appendChild(row);
+          });
+        }
+        area.appendChild(card);
+      });
+
+      if (!hasAny && Object.keys(reportMap).length === 0) {
+        area.innerHTML = '<div class="shortage-tab-empty">この日の日報データがありません</div>';
+      }
     }
 
     // ─── Password Gate ────────────────────────────────────

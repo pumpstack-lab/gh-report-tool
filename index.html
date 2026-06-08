@@ -221,7 +221,10 @@
     document.getElementById('today').textContent = formatDate(selectedDate);
     updateGHLinks(selectedDate);
 
-    // inputがdiv上に重なっているためPC/iOS両方でinputへの直接クリックで開く
+    // date-wrapクリック → showPicker()でPC/iOS両対応
+    document.getElementById('date-wrap').addEventListener('click', () => {
+      try { indexDateEl.showPicker(); } catch(e) {}
+    });
 
     const { createClient } = supabase;
     const db = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
