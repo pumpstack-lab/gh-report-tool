@@ -6,6 +6,7 @@
   <title>管理者ダッシュボード - こもれびホーム</title>
   <script src="config.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
@@ -428,6 +429,15 @@
   <!-- Tab: 不足品確認 -->
   <div id="tab-shortage" class="tab-pane">
     <div class="content">
+      <div style="display:flex; justify-content:flex-end; margin-bottom:12px;">
+        <button onclick="exportShortageToExcel()" style="
+          display:flex; align-items:center; gap:6px;
+          padding:9px 18px; background:#217346; color:white;
+          border:none; border-radius:10px; font-size:14px;
+          font-weight:bold; font-family:inherit; cursor:pointer;">
+          📥 Excel出力
+        </button>
+      </div>
       <div id="shortage-list-area">
         <div class="shortage-tab-empty">読み込み中...</div>
       </div>
@@ -594,6 +604,55 @@
       if (!hasAny && Object.keys(reportMap).length === 0) {
         area.innerHTML = '<div class="shortage-tab-empty">この日の日報データがありません</div>';
       }
+    }
+
+    // ─── Shortage Excel Export ────────────────────────────
+    async function exportShortageToExcel() {
+      const { data, error } = await db.from('reports')
+        .select('gh_num,shortage')
+        .eq('report_date', selectedDate)
+        .order('gh_num');
+
+      if (error) { alert('データの取得に失敗しました'); return; }
+
+      const reportMap = {};
+      (data || []).forEach(r => {
+        const raw = r.shortage;
+        try {
+          reportMap[r.gh_num] = typeof raw === 'string' ? JSON.parse(raw || '[]') : (raw || []);
+        } catch(e) {
+          reportMap[r.gh_num] = [];
+        }
+      });
+
+      const rows = [['ホーム名', '不足品', '状態']];
+      GH_NAMES_ADMIN.forEach((name, idx) => {
+        const ghNum = idx + 1;
+        const items = (reportMap[ghNum] || []).filter(i => i.text && i.text.trim());
+        if (items.length === 0) {
+          rows.push([name, '不足品なし', '—']);
+        } else {
+          items.forEach((item, i) => {
+            rows.push([i === 0 ? name : '', item.text, item.checked ? '対応済' : '未対応']);
+          });
+        }
+      });
+
+      const ws = XLSX.utils.aoa_to_sheet(rows);
+
+      // 列幅設定
+      ws['!cols'] = [{ wch: 22 }, { wch: 30 }, { wch: 10 }];
+
+      // ヘッダー行を太字に
+      ['A1','B1','C1'].forEach(ref => {
+        if (ws[ref]) ws[ref].s = { font: { bold: true } };
+      });
+
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, '不足品一覧');
+
+      const filename = `不足品一覧_${selectedDate}.xlsx`;
+      XLSX.writeFile(wb, filename);
     }
 
     // ─── Password Gate ────────────────────────────────────
