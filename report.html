@@ -151,6 +151,51 @@
 
     .no-residents { text-align: center; padding: 20px 0; }
     .no-residents p { color: #999; margin-bottom: 14px; }
+
+    .short-stay-section {
+      margin-top: 24px;
+      padding-top: 20px;
+      border-top: 2px dashed #d0d8e8;
+    }
+    .short-stay-title {
+      font-size: 13px;
+      font-weight: bold;
+      color: #7a8a9a;
+      margin-bottom: 14px;
+      letter-spacing: 0.05em;
+    }
+    .short-stay-entry {
+      margin-bottom: 20px;
+      padding-bottom: 20px;
+      border-bottom: 1px solid #f0f2f5;
+    }
+    .short-stay-entry:last-child { border-bottom: none; margin-bottom: 0; padding-bottom: 0; }
+    .short-stay-name-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+    .short-stay-label {
+      font-size: 14px;
+      font-weight: bold;
+      color: #4a90d9;
+      white-space: nowrap;
+    }
+    .short-stay-name-input {
+      flex: 1;
+      padding: 6px 10px;
+      border: 1.5px solid #d0d8e8;
+      border-radius: 8px;
+      font-size: 14px;
+      font-family: inherit;
+      color: #1a2a3a;
+    }
+    .short-stay-name-input:focus {
+      outline: none;
+      border-color: #4a90d9;
+      box-shadow: 0 0 0 3px rgba(74,144,217,0.15);
+    }
     .btn-go-settings {
       display: inline-block;
       padding: 11px 22px;
@@ -759,6 +804,15 @@
         residentsData[entry.dataset.name] = val;
         if (val.trim()) hasContent = true;
       });
+      // 短期入所枠（マハロのみ）
+      document.querySelectorAll('.short-stay-entry').forEach(entry => {
+        const key = entry.dataset.shortStayKey;
+        const nameVal = entry.querySelector('input').value.trim();
+        const textVal = entry.querySelector('textarea').value;
+        residentsData[key + 'name'] = nameVal;
+        residentsData[key] = textVal;
+        if (nameVal || textVal.trim()) hasContent = true;
+      });
 
       if (!hasContent) return;
 
@@ -808,6 +862,14 @@
           ta.value = (data.residents || {})[entry.dataset.name] || '';
           autoExpand(ta);
         });
+        // 短期入所枠の復元
+        document.querySelectorAll('.short-stay-entry').forEach(entry => {
+          const key = entry.dataset.shortStayKey;
+          entry.querySelector('input').value = (data.residents || {})[key + 'name'] || '';
+          const ta = entry.querySelector('textarea');
+          ta.value = (data.residents || {})[key] || '';
+          autoExpand(ta);
+        });
         uploadedPhotos = (data.photos || []).map(p => ({ url: p.url, path: p.path }));
         renderPhotoPreview();
       } else {
@@ -815,6 +877,12 @@
         shortageItems = [];
         renderShortageList();
         document.querySelectorAll('.resident-entry textarea').forEach(ta => {
+          ta.value = '';
+          ta.style.height = '';
+        });
+        document.querySelectorAll('.short-stay-entry').forEach(entry => {
+          entry.querySelector('input').value = '';
+          const ta = entry.querySelector('textarea');
           ta.value = '';
           ta.style.height = '';
         });
@@ -835,6 +903,16 @@
         entriesHTML += `
           <div class="s-resident">
             <div class="r-name">${name}</div>
+            <div class="r-text">${text}</div>
+          </div>
+        `;
+      });
+      document.querySelectorAll('.short-stay-entry').forEach((entry, idx) => {
+        const nameVal = entry.querySelector('input').value.trim() || '（氏名未入力）';
+        const text = entry.querySelector('textarea').value || '（未入力）';
+        entriesHTML += `
+          <div class="s-resident">
+            <div class="r-name">短期入所${'①②'[idx]}　${nameVal}</div>
             <div class="r-text">${text}</div>
           </div>
         `;
@@ -1014,6 +1092,29 @@
         });
       }
 
+      // マハロ（gh=6）の場合は短期入所枠を追加
+      if (parseInt(ghNum) === 6) {
+        const section = document.createElement('div');
+        section.className = 'short-stay-section';
+        section.innerHTML = '<div class="short-stay-title">短期入所</div>';
+        [1, 2].forEach(n => {
+          const entry = document.createElement('div');
+          entry.className = 'short-stay-entry';
+          entry.dataset.shortStayKey = `__short_stay_${n}__`;
+          entry.innerHTML = `
+            <div class="short-stay-name-row">
+              <span class="short-stay-label">短期入所${['①','②'][n-1]}</span>
+              <input type="text" class="short-stay-name-input" placeholder="氏名を入力">
+            </div>
+            <textarea placeholder="様子を記入（帰宅〜朝の流れ）..."></textarea>
+          `;
+          entry.querySelector('input').addEventListener('input', scheduleAutoSave);
+          entry.querySelector('textarea').addEventListener('input', function() { autoExpand(this); scheduleAutoSave(); });
+          section.appendChild(entry);
+        });
+        container.appendChild(section);
+      }
+
       // Apply saved report data
       document.getElementById('existing-badge').textContent = reportData ? '記録あり ✓' : '';
       if (reportData) {
@@ -1027,6 +1128,15 @@
         document.querySelectorAll('.resident-entry').forEach(entry => {
           const ta = entry.querySelector('textarea');
           ta.value = (reportData.residents || {})[entry.dataset.name] || '';
+          autoExpand(ta);
+        });
+        // 短期入所枠の復元
+        document.querySelectorAll('.short-stay-entry').forEach(entry => {
+          const key = entry.dataset.shortStayKey;
+          const nameInput = entry.querySelector('input');
+          const ta = entry.querySelector('textarea');
+          nameInput.value = (reportData.residents || {})[key + 'name'] || '';
+          ta.value = (reportData.residents || {})[key] || '';
           autoExpand(ta);
         });
         uploadedPhotos = (reportData.photos || []).map(p => ({ url: p.url, path: p.path }));
