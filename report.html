@@ -774,11 +774,9 @@
       if (inputs.length > 0) inputs[inputs.length - 1].focus();
     });
 
-    // ─── Reporter (name cached in localStorage for convenience) ───
+    // ─── Reporter ───
     const reporterEl = document.getElementById('reporter');
-    reporterEl.value = localStorage.getItem('lastReporter') || '';
     reporterEl.addEventListener('input', () => {
-      localStorage.setItem('lastReporter', reporterEl.value.trim());
       scheduleAutoSave();
     });
 
@@ -798,7 +796,7 @@
         .filter(item => item.text.trim())
         .map(item => ({ text: item.text.trim(), checked: item.checked || false }));
       const residentsData = {};
-      let hasContent = !!reporter || shortageData.length > 0 || uploadedPhotos.length > 0;
+      let hasContent = shortageData.length > 0 || uploadedPhotos.length > 0;
       document.querySelectorAll('.resident-entry').forEach(entry => {
         const val = entry.querySelector('textarea').value;
         residentsData[entry.dataset.name] = val;
@@ -814,7 +812,10 @@
         if (nameVal || textVal.trim()) hasContent = true;
       });
 
-      if (!hasContent) return;
+      // 既存レコードがある場合は担当者名の変更（空欄含む）も保存する
+      const { data: existing } = await db.from('reports').select('id')
+        .eq('gh_num', parseInt(ghNum)).eq('report_date', dateISO).maybeSingle();
+      if (!hasContent && !existing) return;
 
       const { error } = await db.from('reports').upsert({
         gh_num: parseInt(ghNum),
@@ -873,7 +874,7 @@
         uploadedPhotos = (data.photos || []).map(p => ({ url: p.url, path: p.path }));
         renderPhotoPreview();
       } else {
-        reporterEl.value = localStorage.getItem('lastReporter') || '';
+        reporterEl.value = '';
         shortageItems = [];
         renderShortageList();
         document.querySelectorAll('.resident-entry textarea').forEach(ta => {
@@ -1142,7 +1143,7 @@
         uploadedPhotos = (reportData.photos || []).map(p => ({ url: p.url, path: p.path }));
         renderPhotoPreview();
       } else {
-        reporterEl.value = localStorage.getItem('lastReporter') || '';
+        reporterEl.value = '';
         shortageItems = [];
         renderShortageList();
         uploadedPhotos = [];
