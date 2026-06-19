@@ -166,13 +166,29 @@
       document.title = `${ghName} 報告書 ${dateStr}`;
 
       let residentRows = '';
+      const shortStayKeys = ['__short_stay_1__', '__short_stay_2__'];
       Object.entries(residents || {}).forEach(([name, text]) => {
+        // 短期入所の内部キーはスキップ（後でまとめて表示）
+        if (name.startsWith('__short_stay_')) return;
         residentRows += `
           <div class="resident-block">
             <div class="resident-name">${name}</div>
             <div class="resident-text">${text || '（記録なし）'}</div>
           </div>
         `;
+      });
+      // 短期入所枠（名前＋記録をセットで表示）
+      shortStayKeys.forEach((key, idx) => {
+        const stayName = (residents || {})[key + 'name'];
+        const stayText = (residents || {})[key];
+        if (stayName || stayText) {
+          residentRows += `
+            <div class="resident-block">
+              <div class="resident-name">短期入所${'①②'[idx]}　${stayName || '（氏名未入力）'}</div>
+              <div class="resident-text">${stayText || '（記録なし）'}</div>
+            </div>
+          `;
+        }
       });
 
       const tsText = updatedAt
