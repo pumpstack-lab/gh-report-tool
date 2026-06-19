@@ -1038,6 +1038,23 @@
         entryParas.push(new Paragraph({ children: [new TextRun({ text: '' })], spacing: { after: 60 } }));
       });
 
+      // 短期入所枠（マハロのみ）
+      document.querySelectorAll('.short-stay-entry').forEach((entry, idx) => {
+        const stayName = entry.querySelector('input').value.trim();
+        const stayText = entry.querySelector('textarea').value || '';
+        if (!stayName && !stayText.trim()) return;
+        const prefix = `短期入所${'①②'[idx]}　${stayName || '（氏名未入力）'}さん‥`;
+        const indent = '　'.repeat(prefix.length);
+        const lines = stayText.split('\n').filter((l, i) => i === 0 || l.trim() !== '');
+        lines.forEach((line, i) => {
+          entryParas.push(new Paragraph({
+            children: [new TextRun({ text: (i === 0 ? prefix : indent) + line, size: pt(10.5), font: FONT })],
+            spacing: { before: 0, after: 0 },
+          }));
+        });
+        entryParas.push(new Paragraph({ children: [new TextRun({ text: '' })], spacing: { after: 60 } }));
+      });
+
       const doc = new Document({
         sections: [{
           properties: {},

@@ -314,7 +314,9 @@
       content.innerHTML = '';
       data.forEach(report => {
         const dateISO = report.report_date;
-        const residents = Object.entries(report.residents || {});
+        // 短期入所の内部キーはプレビュー・人数カウントから除外
+        const residents = Object.entries(report.residents || {})
+          .filter(([k]) => !k.startsWith('__short_stay_'));
         const filledCount = residents.filter(([, v]) => v && v.trim()).length;
         const firstEntry = residents.find(([, v]) => v && v.trim());
         const preview = firstEntry
@@ -348,11 +350,26 @@
       document.getElementById('btn-edit').href = `report.html?gh=${ghNum}&date=${dateISO}`;
 
       let entriesHTML = '';
+      const shortStayKeys = ['__short_stay_1__', '__short_stay_2__'];
+      // 通常利用者（短期入所の内部キーは除外）
       Object.entries(residents).forEach(([name, text]) => {
+        if (name.startsWith('__short_stay_')) return;
         entriesHTML += `
           <div class="d-resident">
             <div class="r-name">${name}</div>
             <div class="r-text">${text || '（未入力）'}</div>
+          </div>
+        `;
+      });
+      // 短期入所枠（名前＋記録をセットで表示）
+      shortStayKeys.forEach((key, idx) => {
+        const stayName = residents[key + 'name'];
+        const stayText = residents[key];
+        if (!stayName && !stayText) return;
+        entriesHTML += `
+          <div class="d-resident">
+            <div class="r-name">短期入所${'①②'[idx]}　${stayName || '（氏名未入力）'}</div>
+            <div class="r-text">${stayText || '（未入力）'}</div>
           </div>
         `;
       });
