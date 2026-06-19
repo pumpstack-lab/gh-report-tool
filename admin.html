@@ -827,6 +827,7 @@
 
       document.getElementById('modal-body').innerHTML = html;
       document.getElementById('modal').style.display = 'flex';
+      document.getElementById('modal-body').scrollTop = 0;
       history.pushState({ modal: true }, '');
     }
 
