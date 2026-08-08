@@ -663,6 +663,10 @@
     dateEl.value = urlDate || todayISO();
     let previousDate = dateEl.value;
     let saveTimer = null;
+    // refreshDateDisplay()がupdateHolidayIndicator/renderWorkerRows経由で参照するため、初回呼び出しより前に宣言する（TDZ対策）
+    let staffList = [];       // [{id,last_name,first_name,staff_type}]
+    let holidaySet = new Set(); // 'YYYY-MM-DD'
+    let workerRows = [];      // [{staff_id, work_type}]
     refreshDateDisplay();
 
     // iOS: input が上に重なってタップで開く / PC: showPicker() で明示的に開く
@@ -786,9 +790,7 @@
       { v: 'holiday_day_night', label: '休日日勤＋休日夜勤',   holiday: true },
       { v: 'six_hour',          label: '6時間コース',         holiday: null },
     ];
-    let staffList = [];       // [{id,last_name,first_name,staff_type}]
-    let holidaySet = new Set(); // 'YYYY-MM-DD'
-    let workerRows = [];      // [{staff_id, work_type}]
+    // staffList / holidaySet / workerRows はrefreshDateDisplay()初回呼び出しより前（dateEl初期化直後）で宣言済み
 
     async function initStaffAndHolidays() {
       const [staffRes, holRes] = await Promise.all([
