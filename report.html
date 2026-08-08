@@ -481,9 +481,11 @@
   </div>
 
   <div class="section">
-    <div class="reporter-row">
-      <label for="reporter">報告者</label>
-      <input type="text" id="reporter" class="reporter-input" placeholder="氏名を入力">
+    <div class="reporter-row" style="align-items:flex-start;flex-direction:column;gap:8px">
+      <label>担当者 <span id="holiday-indicator" style="font-size:12px;font-weight:normal;color:#888;margin-left:8px"></span></label>
+      <div id="legacy-reporter-note" style="display:none;font-size:13px;color:#8a6d3b;background:#fcf8e3;border-radius:8px;padding:8px 12px;width:100%">旧形式の日報です（報告者: <span id="legacy-reporter-name"></span>）。編集する場合は下から担当者を選び直してください。</div>
+      <div id="workers-container" style="width:100%"></div>
+      <button type="button" class="btn-add-shortage" id="btn-add-worker">＋ 担当者を追加</button>
     </div>
   </div>
 
@@ -680,6 +682,8 @@
       const str = getReiwaDate(dateEl.value);
       document.getElementById('date-display').textContent = str;
       document.getElementById('date-card-text').textContent = str;
+      updateHolidayIndicator();
+      renderWorkerRows();
     }
 
     // ─── Residents ────────────────────────────────────────
@@ -774,11 +778,146 @@
       if (inputs.length > 0) inputs[inputs.length - 1].focus();
     });
 
-    // ─── Reporter ───
-    const reporterEl = document.getElementById('reporter');
-    reporterEl.addEventListener('input', () => {
-      scheduleAutoSave();
+    // ─── Workers (担当者＋勤務種別) ───────────────────
+    const WORK_TYPES = [
+      { v: 'weekday_night',     label: '平日夜勤',            holiday: false },
+      { v: 'holiday_night',     label: '休日夜勤',            holiday: true },
+      { v: 'holiday_day',       label: '休日日勤',            holiday: true },
+      { v: 'holiday_day_night', label: '休日日勤＋休日夜勤',   holiday: true },
+      { v: 'six_hour',          label: '6時間コース',         holiday: null },
+    ];
+    let staffList = [];       // [{id,last_name,first_name,staff_type}]
+    let holidaySet = new Set(); // 'YYYY-MM-DD'
+    let workerRows = [];      // [{staff_id, work_type}]
+
+    async function initStaffAndHolidays() {
+      const [staffRes, holRes] = await Promise.all([
+        db.from('staff').select('*').eq('active', true).order('sort_order'),
+        db.from('jp_holidays').select('holiday_date'),
+      ]);
+      staffList = staffRes.data || [];
+      holidaySet = new Set((holRes.data || []).map(r => r.holiday_date));
+    }
+
+    function isHolidayISO(iso) {
+      const d = new Date(iso + 'T00:00:00');
+      return d.getDay() === 0 || d.getDay() === 6 || holidaySet.has(iso);
+    }
+
+    function staffById(id) { return staffList.find(s => s.id === id); }
+
+    function currentReporterText() {
+      const names = workerRows.map(r => staffById(r.staff_id))
+        .filter(Boolean).map(s => `${s.last_name} ${s.first_name}`.trim());
+      return names.join('、');
+    }
+
+    function updateHolidayIndicator() {
+      const el = document.getElementById('holiday-indicator');
+      const iso = dateEl.value;
+      if (!iso) { el.textContent = ''; return; }
+      if (isHolidayISO(iso)) {
+        const d = new Date(iso + 'T00:00:00');
+        el.textContent = d.getDay() === 0 || d.getDay() === 6 ? '（この日は休日です）' : '（この日は祝日・休日です）';
+        el.style.color = '#c0392b';
+      } else {
+        el.textContent = '（この日は平日です）';
+        el.style.color = '#888';
+      }
+    }
+
+    function workerWarning(row) {
+      if (!row.staff_id || !row.work_type) return '';
+      const wt = WORK_TYPES.find(w => w.v === row.work_type);
+      if (!wt || wt.holiday === null) return '';
+      const hol = isHolidayISO(dateEl.value);
+      if (hol && wt.holiday === false) return '⚠️ 休日に平日種別が選ばれています';
+      if (!hol && wt.holiday === true) return '⚠️ 平日に休日種別が選ばれています';
+      return '';
+    }
+
+    function renderWorkerRows() {
+      const box = document.getElementById('workers-container');
+      box.innerHTML = '';
+      workerRows.forEach((row, idx) => {
+        const staff = staffById(row.staff_id);
+        const isA = staff && staff.staff_type === 'a_staff';
+        const div = document.createElement('div');
+        div.style.cssText = 'display:flex;gap:6px;align-items:center;margin-bottom:8px;flex-wrap:wrap';
+        const staffSel = document.createElement('select');
+        staffSel.style.cssText = 'flex:1;min-width:130px;padding:10px;border:1.5px solid #ddd;border-radius:8px;font-size:15px;background:#fff';
+        staffSel.innerHTML = '<option value="">担当者を選択</option>'
+          + '<optgroup label="世話人">' + staffList.filter(s => s.staff_type === 'sewanin')
+            .map(s => `<option value="${s.id}">${s.last_name} ${s.first_name}</option>`).join('') + '</optgroup>'
+          + '<optgroup label="A職員（法人職員）">' + staffList.filter(s => s.staff_type === 'a_staff')
+            .map(s => `<option value="${s.id}">${s.last_name} ${s.first_name}</option>`).join('') + '</optgroup>';
+        staffSel.value = row.staff_id || '';
+        staffSel.addEventListener('change', () => {
+          row.staff_id = staffSel.value || null;
+          const s = staffById(row.staff_id);
+          if (s && s.staff_type === 'a_staff') row.work_type = null;
+          renderWorkerRows();
+          scheduleAutoSave();
+        });
+        const typeSel = document.createElement('select');
+        typeSel.style.cssText = 'flex:1;min-width:130px;padding:10px;border:1.5px solid #ddd;border-radius:8px;font-size:15px;background:#fff';
+        if (isA) {
+          typeSel.innerHTML = '<option value="">—（委託料対象外）</option>';
+          typeSel.disabled = true;
+        } else {
+          typeSel.innerHTML = '<option value="">勤務種別を選択</option>'
+            + WORK_TYPES.map(w => `<option value="${w.v}">${w.label}</option>`).join('');
+          typeSel.value = row.work_type || '';
+        }
+        typeSel.addEventListener('change', () => {
+          row.work_type = typeSel.value || null;
+          renderWorkerRows();
+          scheduleAutoSave();
+        });
+        const del = document.createElement('button');
+        del.type = 'button';
+        del.textContent = '✕';
+        del.className = 'btn-remove-shortage';
+        del.addEventListener('click', () => {
+          workerRows.splice(idx, 1);
+          renderWorkerRows();
+          scheduleAutoSave();
+        });
+        div.appendChild(staffSel);
+        div.appendChild(typeSel);
+        div.appendChild(del);
+        const warn = workerWarning(row);
+        if (warn) {
+          const w = document.createElement('div');
+          w.style.cssText = 'width:100%;font-size:12px;color:#c0392b';
+          w.textContent = warn + '（このまま保存もできます）';
+          div.appendChild(w);
+        }
+        box.appendChild(div);
+      });
+    }
+
+    document.getElementById('btn-add-worker').addEventListener('click', () => {
+      workerRows.push({ staff_id: null, work_type: null });
+      renderWorkerRows();
     });
+
+    function restoreWorkers(data) {
+      const legacyNote = document.getElementById('legacy-reporter-note');
+      if (data && data.workers && data.workers.length) {
+        workerRows = data.workers.map(w => ({ staff_id: w.staff_id, work_type: w.work_type }));
+        legacyNote.style.display = 'none';
+      } else {
+        workerRows = [];
+        if (data && (data.reporter || '').trim()) {
+          document.getElementById('legacy-reporter-name').textContent = data.reporter;
+          legacyNote.style.display = 'block';
+        } else {
+          legacyNote.style.display = 'none';
+        }
+      }
+      renderWorkerRows();
+    }
 
     // ─── Auto-save ────────────────────────────────────────
     function scheduleAutoSave() {
@@ -791,12 +930,19 @@
     }
 
     async function saveCurrentDataForDate(dateISO) {
-      const reporter = reporterEl.value.trim();
+      const reporter = currentReporterText();
+      const workersData = workerRows
+        .filter(r => r.staff_id)
+        .map(r => {
+          const s = staffById(r.staff_id);
+          return { staff_id: r.staff_id, name: `${s.last_name} ${s.first_name}`.trim(),
+                   staff_type: s.staff_type, work_type: s.staff_type === 'a_staff' ? null : r.work_type };
+        });
       const shortageData = shortageItems
         .filter(item => item.text.trim())
         .map(item => ({ text: item.text.trim(), checked: item.checked || false }));
       const residentsData = {};
-      let hasContent = shortageData.length > 0 || uploadedPhotos.length > 0;
+      let hasContent = shortageData.length > 0 || uploadedPhotos.length > 0 || workersData.length > 0;
       document.querySelectorAll('.resident-entry').forEach(entry => {
         const val = entry.querySelector('textarea').value;
         residentsData[entry.dataset.name] = val;
@@ -822,6 +968,7 @@
         gh_name: ghName,
         report_date: dateISO,
         reporter: reporter,
+        workers: workersData,
         residents: residentsData,
         shortage: shortageData,
         photos: uploadedPhotos.map(p => ({ url: p.url, path: p.path })),
@@ -849,7 +996,7 @@
       document.getElementById('existing-badge').textContent = data ? '記録あり ✓' : '';
 
       if (data) {
-        reporterEl.value = data.reporter || '';
+        restoreWorkers(data);
         const rawS = data.shortage;
         const shortageArr2 = typeof rawS === 'string' ? JSON.parse(rawS || '[]') : (rawS || []);
         shortageItems = shortageArr2.map(item =>
@@ -874,7 +1021,7 @@
         uploadedPhotos = (data.photos || []).map(p => ({ url: p.url, path: p.path }));
         renderPhotoPreview();
       } else {
-        reporterEl.value = '';
+        restoreWorkers(null);
         shortageItems = [];
         renderShortageList();
         document.querySelectorAll('.resident-entry textarea').forEach(ta => {
@@ -894,7 +1041,7 @@
 
     // ─── Summary Modal ────────────────────────────────────
     function showSummary() {
-      const reporter = reporterEl.value || '（未入力）';
+      const reporter = currentReporterText() || document.getElementById('legacy-reporter-name').textContent || '（未入力）';
       const dateStr = getReiwaDate(dateEl.value);
 
       let entriesHTML = '';
@@ -985,7 +1132,7 @@
       try { await loadWordLibs(); } catch(e) { alert('Word出力ライブラリの読み込みに失敗しました'); return; }
       saveCurrentData();
 
-      const reporter = reporterEl.value || '';
+      const reporter = currentReporterText() || document.getElementById('legacy-reporter-name').textContent || '';
       const dateStr = getReiwaDate(dateEl.value);
       const dateNum = dateEl.value.replace(/-/g,'');
       const safeName = ghName.replace(/[^　-鿿豈-﫿゠-ヿa-zA-Z0-9]/g,'');
@@ -1080,6 +1227,9 @@
       const container = document.getElementById('residents-container');
       container.innerHTML = '<div style="text-align:center;padding:20px;color:#aaa;font-size:14px">読み込み中...</div>';
 
+      await initStaffAndHolidays();
+      updateHolidayIndicator();
+
       const [{ data: residentsData }, { data: reportData }] = await Promise.all([
         db.from('residents').select('name').eq('gh_num', parseInt(ghNum)).eq('active', true).order('sort_order'),
         db.from('reports').select('*').eq('gh_num', parseInt(ghNum)).eq('report_date', dateISO).maybeSingle()
@@ -1136,7 +1286,7 @@
       // Apply saved report data
       document.getElementById('existing-badge').textContent = reportData ? '記録あり ✓' : '';
       if (reportData) {
-        reporterEl.value = reportData.reporter || '';
+        restoreWorkers(reportData);
         const rawShortage = reportData.shortage;
         const shortageArr = typeof rawShortage === 'string' ? JSON.parse(rawShortage || '[]') : (rawShortage || []);
         shortageItems = shortageArr.map(item =>
@@ -1160,7 +1310,7 @@
         uploadedPhotos = (reportData.photos || []).map(p => ({ url: p.url, path: p.path }));
         renderPhotoPreview();
       } else {
-        reporterEl.value = '';
+        restoreWorkers(null);
         shortageItems = [];
         renderShortageList();
         uploadedPhotos = [];
