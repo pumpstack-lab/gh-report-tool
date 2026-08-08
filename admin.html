@@ -404,6 +404,7 @@
       <button class="tab-btn active" onclick="switchTab(this,'reports')">📋 日報確認</button>
       <button class="tab-btn" onclick="switchTab(this,'shortage')">⚠️ 不足品</button>
       <button class="tab-btn" onclick="switchTab(this,'residents')">👤 入居者管理</button>
+      <button class="tab-btn" onclick="switchTab(this,'staff')">🧑‍💼 職員管理</button>
       <button class="tab-btn" onclick="switchTab(this,'urls')">🔗 スタッフURL</button>
     </div>
   </div>
@@ -460,6 +461,26 @@
         <div class="resident-list" id="resident-list">
           <div class="resident-empty">GHを選択してください</div>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Tab: 職員管理 -->
+  <div id="tab-staff" class="tab-pane">
+    <div class="content">
+      <div class="residents-card">
+        <h3>職員一覧（担当者ドロップダウンに表示されます）</h3>
+        <div id="staff-list"></div>
+        <div class="add-resident-row" style="margin-top:14px;flex-wrap:wrap">
+          <input type="text" id="new-staff-last" class="add-resident-input" placeholder="姓" style="flex:1;min-width:80px">
+          <input type="text" id="new-staff-first" class="add-resident-input" placeholder="名" style="flex:1;min-width:80px">
+          <select id="new-staff-type" style="padding:10px;border:1.5px solid #d0d8e8;border-radius:10px;font-size:14px;font-family:inherit">
+            <option value="sewanin">世話人</option>
+            <option value="a_staff">A職員</option>
+          </select>
+          <button type="button" class="btn-add-resident" onclick="addStaff()">追加</button>
+        </div>
+        <p style="font-size:12px;color:#888;margin-top:10px">※退職した職員は「退職」にすると選択肢から消えます（過去の日報はそのまま残ります）。委託料エクセルと同じ表記（例: 山﨑ミサヱ）で登録してください。</p>
       </div>
     </div>
   </div>
@@ -531,6 +552,7 @@
       const showDate = name === 'reports' || name === 'shortage';
       document.getElementById('date-bar').style.display = showDate ? 'flex' : 'none';
       if (name === 'shortage') loadShortageTab(selectedDate);
+      if (name === 'staff') loadStaffList();
     }
 
     // ─── Shortage Tab ──────────────────────────────────────
@@ -958,6 +980,53 @@
       const { error } = await db.from('residents').update({ active: false }).eq('id', id);
       if (error) { alert('削除に失敗しました'); return; }
       loadResidents(ghNum);
+    }
+
+    // ─── Staff Management ─────────────────────────────────────
+    async function loadStaffList() {
+      const area = document.getElementById('staff-list');
+      area.innerHTML = '<div style="color:#aaa;padding:12px">読み込み中...</div>';
+      const { data, error } = await db.from('staff').select('*')
+        .order('staff_type').order('sort_order');
+      if (error) { area.innerHTML = '<div style="color:#e74c3c;padding:12px">読み込み失敗</div>'; return; }
+      area.innerHTML = '';
+      (data || []).forEach(s => {
+        const row = document.createElement('div');
+        row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:9px 4px;border-bottom:1px solid #f0f0f0' + (s.active ? '' : ';opacity:.45');
+        row.innerHTML = `
+          <span style="flex:1;font-size:15px">${s.last_name} ${s.first_name}</span>
+          <span style="font-size:12px;padding:3px 8px;border-radius:6px;background:${s.staff_type === 'sewanin' ? '#eaf4ff;color:#2b6cb0' : '#f3efff;color:#6b46c1'}">${s.staff_type === 'sewanin' ? '世話人' : 'A職員'}</span>
+          <button type="button" style="padding:6px 10px;border:1px solid #ddd;border-radius:6px;background:#fff;font-size:12px" onclick="toggleStaffActive('${s.id}', ${!s.active})">${s.active ? '退職' : '復帰'}</button>
+        `;
+        area.appendChild(row);
+      });
+      if (!(data || []).length) area.innerHTML = '<div style="color:#aaa;padding:12px">職員が未登録です</div>';
+    }
+
+    async function addStaff() {
+      const ln = document.getElementById('new-staff-last').value.trim();
+      const fn = document.getElementById('new-staff-first').value.trim();
+      const type = document.getElementById('new-staff-type').value;
+      if (!ln) { alert('姓を入力してください'); return; }
+      const { data: existing } = await db.from('staff').select('id')
+        .eq('last_name', ln).eq('first_name', fn).maybeSingle();
+      if (existing) { alert('同姓同名の職員が既に登録されています'); return; }
+      const { data: maxRow } = await db.from('staff').select('sort_order')
+        .eq('staff_type', type).order('sort_order', { ascending: false }).limit(1).maybeSingle();
+      const { error } = await db.from('staff').insert({
+        last_name: ln, first_name: fn, staff_type: type,
+        sort_order: (maxRow?.sort_order || (type === 'sewanin' ? 0 : 190)) + 10
+      });
+      if (error) { alert('追加に失敗しました: ' + error.message); return; }
+      document.getElementById('new-staff-last').value = '';
+      document.getElementById('new-staff-first').value = '';
+      loadStaffList();
+    }
+
+    async function toggleStaffActive(id, active) {
+      const { error } = await db.from('staff').update({ active }).eq('id', id);
+      if (error) { alert('更新に失敗しました: ' + error.message); return; }
+      loadStaffList();
     }
 
     // ─── Staff URL Tab ─────────────────────────────────────
