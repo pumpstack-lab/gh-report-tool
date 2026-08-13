@@ -504,6 +504,7 @@
   </div>
 
   <script>
+    function escapeHtml(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
     const GH_NAMES = [
       'こもれびホーム３−２',
       'こもれびホーム４',
@@ -994,7 +995,7 @@
         const row = document.createElement('div');
         row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:9px 4px;border-bottom:1px solid #f0f0f0' + (s.active ? '' : ';opacity:.45');
         row.innerHTML = `
-          <span style="flex:1;font-size:15px">${s.last_name} ${s.first_name}</span>
+          <span style="flex:1;font-size:15px">${escapeHtml(s.last_name)} ${escapeHtml(s.first_name)}</span>
           <span style="font-size:12px;padding:3px 8px;border-radius:6px;background:${s.staff_type === 'sewanin' ? '#eaf4ff;color:#2b6cb0' : '#f3efff;color:#6b46c1'}">${s.staff_type === 'sewanin' ? '世話人' : 'A職員'}</span>
           <button type="button" style="padding:6px 10px;border:1px solid #ddd;border-radius:6px;background:#fff;font-size:12px" onclick="toggleStaffActive('${s.id}', ${!s.active})">${s.active ? '退職' : '復帰'}</button>
         `;
@@ -1024,6 +1025,7 @@
     }
 
     async function toggleStaffActive(id, active) {
+      if (!active && !confirm('退職にしますか？（担当者ドロップダウンから消えます・過去の日報はそのまま残ります）')) return;
       const { error } = await db.from('staff').update({ active }).eq('id', id);
       if (error) { alert('更新に失敗しました: ' + error.message); return; }
       loadStaffList();

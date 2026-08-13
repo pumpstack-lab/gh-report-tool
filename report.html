@@ -880,6 +880,7 @@
         del.type = 'button';
         del.textContent = '✕';
         del.className = 'btn-remove-shortage';
+        del.style.cssText = 'min-width:40px;min-height:40px;margin-left:4px';
         del.addEventListener('click', () => {
           workerRows.splice(idx, 1);
           renderWorkerRows();
@@ -888,6 +889,12 @@
         div.appendChild(staffSel);
         div.appendChild(typeSel);
         div.appendChild(del);
+        if (isA) {
+          const note = document.createElement('div');
+          note.style.cssText = 'width:100%;font-size:11px;color:#888';
+          note.textContent = 'A職員（法人職員）は法人から給与が支払われるため、委託料の勤務種別は記録しません';
+          div.appendChild(note);
+        }
         const warn = workerWarning(row);
         if (warn) {
           const w = document.createElement('div');
