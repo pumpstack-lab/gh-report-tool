@@ -756,50 +756,6 @@
       });
     }
 
-    async function initResidents() {
-      const container = document.getElementById('residents-container');
-      container.innerHTML = '<div style="text-align:center;padding:20px;color:#aaa;font-size:14px">読み込み中...</div>';
-
-      const { data } = await db.from('residents')
-        .select('id, name')
-        .eq('gh_num', parseInt(ghNum))
-        .eq('active', true)
-        .order('sort_order');
-
-      const residentRows = data || [];
-      await loadDiaperItemsForResidents(residentRows);
-      container.innerHTML = '';
-
-      if (residentRows.length === 0) {
-        container.innerHTML = `
-          <div class="no-residents">
-            <p>利用者が登録されていません</p>
-            <p style="font-size:13px;color:#aaa;margin-top:8px">管理者ページから利用者を登録してください</p>
-          </div>
-        `;
-        return;
-      }
-
-      residentRows.forEach(r => {
-        const div = document.createElement('div');
-        div.className = 'resident-entry';
-        div.dataset.name = r.name;
-        div.dataset.residentId = r.id;
-        div.innerHTML = `
-          <div class="resident-name-label">${r.name}</div>
-          <textarea placeholder="${r.name}の様子を記入（帰宅〜朝の流れ）..."></textarea>
-        `;
-        renderDiaperStepper(div, r.id);
-        container.appendChild(div);
-      });
-
-      container.querySelectorAll('textarea').forEach(ta => {
-        ta.addEventListener('input', function() {
-          autoExpand(this);
-          scheduleAutoSave();
-        });
-      });
-    }
 
     // ─── Shortage List ────────────────────────────────────
     let shortageItems = []; // [{text, checked}]
@@ -1335,28 +1291,39 @@
       updateHolidayIndicator();
 
       const [{ data: residentsData }, { data: reportData }] = await Promise.all([
-        db.from('residents').select('name').eq('gh_num', parseInt(ghNum)).eq('active', true).order('sort_order'),
+        db.from('residents').select('id, name').eq('gh_num', parseInt(ghNum)).eq('active', true).order('sort_order'),
         db.from('reports').select('*').eq('gh_num', parseInt(ghNum)).eq('report_date', dateISO).maybeSingle()
       ]);
 
       // Render residents
-      const residentNames = (residentsData || []).map(r => r.name);
+      const residentRows = residentsData || [];
+      // オムツ行と当日の使用実績を先に読み込んでからステッパー込みで描画する
+      await loadDiaperItemsForResidents(residentRows);
+      const diaperItemIds = Object.values(diaperItemsByResident).flat().map(i => i.id);
+      diaperUsageValues = {};
+      if (diaperItemIds.length > 0) {
+        const { data: usageRows } = await db.from('diaper_usage')
+          .select('item_id, count').eq('usage_date', dateISO).in('item_id', diaperItemIds);
+        (usageRows || []).forEach(u => { diaperUsageValues[u.item_id] = u.count; });
+      }
       container.innerHTML = '';
-      if (residentNames.length === 0) {
+      if (residentRows.length === 0) {
         container.innerHTML = `
           <div class="no-residents">
             <p>利用者が登録されていません</p>
             <p style="font-size:13px;color:#aaa;margin-top:8px">管理者ページから利用者を登録してください</p>
           </div>`;
       } else {
-        residentNames.forEach(name => {
+        residentRows.forEach(r => {
           const div = document.createElement('div');
           div.className = 'resident-entry';
-          div.dataset.name = name;
+          div.dataset.name = r.name;
+          div.dataset.residentId = r.id;
           div.innerHTML = `
-            <div class="resident-name-label">${name}</div>
-            <textarea placeholder="${name}の様子を記入（帰宅〜朝の流れ）..."></textarea>
+            <div class="resident-name-label">${r.name}</div>
+            <textarea placeholder="${r.name}の様子を記入（帰宅〜朝の流れ）..."></textarea>
           `;
+          renderDiaperStepper(div, r.id);
           container.appendChild(div);
         });
         container.querySelectorAll('textarea').forEach(ta => {
