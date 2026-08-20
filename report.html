@@ -136,9 +136,9 @@
     }
     .diaper-stepper-name { flex: 1; }
     .diaper-stepper-btn {
-      width: 30px; height: 30px; border-radius: 50%; border: 1.5px solid #4a90d9;
-      background: white; color: #4a90d9; font-size: 16px; font-weight: bold;
-      line-height: 1; cursor: pointer;
+      width: 44px; height: 44px; border-radius: 50%; border: 1.5px solid #4a90d9;
+      background: white; color: #4a90d9; font-size: 20px; font-weight: bold;
+      line-height: 1; cursor: pointer; flex-shrink: 0;
     }
     .diaper-stepper-btn:active { background: #eef6ff; }
     .diaper-stepper-count { min-width: 24px; text-align: center; font-weight: bold; }
@@ -714,6 +714,18 @@
     let diaperItemsByResident = {}; // { residentId: [{id, name}] }
     let diaperUsageValues = {};     // { itemId: count }
 
+    function escapeHtml(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+    async function loadDiaperUsage(dateISO) {
+      const diaperItemIds = Object.values(diaperItemsByResident).flat().map(i => i.id);
+      diaperUsageValues = {};
+      if (diaperItemIds.length > 0) {
+        const { data: usageRows } = await db.from('diaper_usage')
+          .select('item_id, count').eq('usage_date', dateISO).in('item_id', diaperItemIds);
+        (usageRows || []).forEach(u => { diaperUsageValues[u.item_id] = u.count; });
+      }
+    }
+
     async function loadDiaperItemsForResidents(residentRows) {
       diaperItemsByResident = {};
       const ids = residentRows.map(r => r.id);
@@ -735,10 +747,10 @@
         row.dataset.itemId = item.id;
         const current = diaperUsageValues[item.id] || 0;
         row.innerHTML = `
-          <span class="diaper-stepper-name">${item.name}</span>
-          <button type="button" class="diaper-stepper-btn" data-op="minus">−</button>
+          <span class="diaper-stepper-name">${escapeHtml(item.name)}</span>
+          <button type="button" class="diaper-stepper-btn" data-op="minus" aria-label="${escapeHtml(item.name)}を1減らす">−</button>
           <span class="diaper-stepper-count">${current}</span>
-          <button type="button" class="diaper-stepper-btn" data-op="plus">＋</button>
+          <button type="button" class="diaper-stepper-btn" data-op="plus" aria-label="${escapeHtml(item.name)}を1増やす">＋</button>
         `;
         row.querySelector('[data-op="minus"]').addEventListener('click', () => {
           const v = Math.max(0, (diaperUsageValues[item.id] || 0) - 1);
@@ -998,18 +1010,33 @@
         if (count > 0) diaperUpsertRows.push({ item_id: itemId, usage_date: dateISO, count });
         else diaperDeleteItemIds.push(itemId);
       });
+      let diaperSaveError = null;
       if (diaperUpsertRows.length > 0) {
         const { error: diaperErr } = await db.from('diaper_usage')
           .upsert(diaperUpsertRows, { onConflict: 'item_id,usage_date' });
-        if (diaperErr) console.error('diaper_usage upsert failed:', diaperErr.message);
+        if (diaperErr) { console.error('diaper_usage upsert failed:', diaperErr.message); diaperSaveError = diaperErr; }
       }
       if (diaperDeleteItemIds.length > 0) {
         const { error: diaperDelErr } = await db.from('diaper_usage')
           .delete().eq('usage_date', dateISO).in('item_id', diaperDeleteItemIds);
-        if (diaperDelErr) console.error('diaper_usage delete failed:', diaperDelErr.message);
+        if (diaperDelErr) { console.error('diaper_usage delete failed:', diaperDelErr.message); diaperSaveError = diaperSaveError || diaperDelErr; }
       }
 
-      if (!hasContent && !existing) return;
+      if (!hasContent && !existing) {
+        // 日報本文が空でもオムツだけ入力された日は保存結果をインジケーターに出す
+        if (diaperUpsertRows.length > 0 || diaperDeleteItemIds.length > 0) {
+          const ind = document.getElementById('draft-indicator');
+          if (diaperSaveError) {
+            ind.style.color = '#e74c3c';
+            ind.textContent = '⚠️ 保存失敗: ' + diaperSaveError.message;
+          } else {
+            ind.style.color = '';
+            ind.textContent = '保存しました ✓';
+          }
+          setTimeout(() => ind.textContent = '', 3000);
+        }
+        return;
+      }
 
       const { error } = await db.from('reports').upsert({
         gh_num: parseInt(ghNum),
@@ -1024,9 +1051,10 @@
       }, { onConflict: 'gh_num,report_date' });
 
       const ind = document.getElementById('draft-indicator');
-      if (error) {
+      const saveFailure = error || diaperSaveError;
+      if (saveFailure) {
         ind.style.color = '#e74c3c';
-        ind.textContent = '⚠️ 保存失敗: ' + error.message;
+        ind.textContent = '⚠️ 保存失敗: ' + saveFailure.message;
       } else {
         ind.style.color = '';
         ind.textContent = '保存しました ✓';
@@ -1043,13 +1071,7 @@
 
       document.getElementById('existing-badge').textContent = data ? '記録あり ✓' : '';
 
-      const diaperItemIds = Object.values(diaperItemsByResident).flat().map(i => i.id);
-      diaperUsageValues = {};
-      if (diaperItemIds.length > 0) {
-        const { data: usageRows } = await db.from('diaper_usage')
-          .select('item_id, count').eq('usage_date', dateISO).in('item_id', diaperItemIds);
-        (usageRows || []).forEach(u => { diaperUsageValues[u.item_id] = u.count; });
-      }
+      await loadDiaperUsage(dateISO);
       document.querySelectorAll('.diaper-stepper-row').forEach(row => {
         const v = diaperUsageValues[row.dataset.itemId] || 0;
         row.querySelector('.diaper-stepper-count').textContent = v;
@@ -1299,13 +1321,7 @@
       const residentRows = residentsData || [];
       // オムツ行と当日の使用実績を先に読み込んでからステッパー込みで描画する
       await loadDiaperItemsForResidents(residentRows);
-      const diaperItemIds = Object.values(diaperItemsByResident).flat().map(i => i.id);
-      diaperUsageValues = {};
-      if (diaperItemIds.length > 0) {
-        const { data: usageRows } = await db.from('diaper_usage')
-          .select('item_id, count').eq('usage_date', dateISO).in('item_id', diaperItemIds);
-        (usageRows || []).forEach(u => { diaperUsageValues[u.item_id] = u.count; });
-      }
+      await loadDiaperUsage(dateISO);
       container.innerHTML = '';
       if (residentRows.length === 0) {
         container.innerHTML = `
@@ -1320,8 +1336,8 @@
           div.dataset.name = r.name;
           div.dataset.residentId = r.id;
           div.innerHTML = `
-            <div class="resident-name-label">${r.name}</div>
-            <textarea placeholder="${r.name}の様子を記入（帰宅〜朝の流れ）..."></textarea>
+            <div class="resident-name-label">${escapeHtml(r.name)}</div>
+            <textarea placeholder="${escapeHtml(r.name)}の様子を記入（帰宅〜朝の流れ）..."></textarea>
           `;
           renderDiaperStepper(div, r.id);
           container.appendChild(div);
