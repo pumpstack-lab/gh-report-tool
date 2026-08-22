@@ -83,6 +83,39 @@ function totalPieces(packs, loose, piecesPerPack) {
   return p * per + l;
 }
 
-const _api = { computeStock, avgDaily, daysLeft, statusOf, sortRows, itemLabel, totalPieces };
+// フラットな行配列を利用者カードにまとめる。
+// カードの並びは「カード内の最小残日数」の昇順＝危険な人が上（本機能の目的が注文漏れ防止のため
+// 名前順にはしない）。カード内も同じ昇順。全品目がpendingのカードは最後尾。
+// 品目が1件も無い利用者はそもそも rows に現れないため、カードも作られない（＝登録済みの人だけ表示）。
+function groupByResident(rows) {
+  const byId = new Map();
+  rows.forEach(row => {
+    const id = row.item.resident_id;
+    if (!byId.has(id)) {
+      byId.set(id, { residentId: id, residentName: row.residentName, ghNum: row.ghNum, rows: [] });
+    }
+    byId.get(id).rows.push(row);
+  });
+
+  const cards = [...byId.values()].map(card => {
+    const sorted = sortRows(card.rows);
+    const worst = sorted.find(r => r.daysLeft !== null && r.daysLeft !== undefined) || null;
+    return {
+      ...card,
+      rows: sorted,
+      worstDays: worst ? worst.daysLeft : null,
+      status: worst ? worst.status : 'pending',
+    };
+  });
+
+  return cards.sort((a, b) => {
+    if (a.worstDays === null && b.worstDays === null) return 0;
+    if (a.worstDays === null) return 1;
+    if (b.worstDays === null) return -1;
+    return a.worstDays - b.worstDays;
+  });
+}
+
+const _api = { computeStock, avgDaily, daysLeft, statusOf, sortRows, itemLabel, totalPieces, groupByResident };
 if (typeof module !== 'undefined' && module.exports) module.exports = _api;
 if (typeof window !== 'undefined') window.DiaperLogic = _api;
