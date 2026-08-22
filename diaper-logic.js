@@ -64,6 +64,15 @@ function sortRows(rows) {
   });
 }
 
-const _api = { computeStock, avgDaily, daysLeft, statusOf, sortRows };
+// 表示名を組み立てる。両リポジトリの全画面がこの関数だけを使い、文字列連結を各画面に散らさない。
+// ⚠️ 旧nameへのフォールバックは必須。管理画面(Render)と現場日報(GitHub Pages)は別デプロイで
+//    反映タイミングを制御できず、片方だけ先に出ると "undefined" が現場に表示されるため。
+//    migration B で name カラムを落とすまでフォールバックを削除しないこと。
+function itemLabel(item) {
+  if (item.maker && item.item_type) return `${item.maker}／${item.item_type}`;
+  return item.name || '（品名未設定）';
+}
+
+const _api = { computeStock, avgDaily, daysLeft, statusOf, sortRows, itemLabel };
 if (typeof module !== 'undefined' && module.exports) module.exports = _api;
 if (typeof window !== 'undefined') window.DiaperLogic = _api;
