@@ -6,6 +6,7 @@
   <title>業務日報 入力</title>
   <script src="config.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="diaper-logic.js"></script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
@@ -142,6 +143,16 @@
     }
     .diaper-stepper-btn:active { background: #eef6ff; }
     .diaper-stepper-count { min-width: 24px; text-align: center; font-weight: bold; }
+    /* 在庫が少ないときだけ出るバッジ。色は管理画面と同じ意味（赤=残7日以内・黄=残14日以内）。
+       色だけに頼らずテキスト「残り少」を必ず伴う。 */
+    .diaper-low-badge {
+      display: inline-block; margin-left: 6px; padding: 4px 10px;
+      border-radius: 10px; font-size: 11px; font-weight: bold; white-space: nowrap;
+      vertical-align: 1px; font-family: inherit; cursor: pointer; border: none;
+    }
+    .diaper-low-badge:disabled { opacity: 0.55; cursor: default; }
+    .diaper-low-badge.red { background: #c0392b; color: #fff; }
+    .diaper-low-badge.yellow { background: #fff3e0; color: #96610a; border: 1px solid #f0cf9a; }
 
     textarea {
       width: 100%;
@@ -713,6 +724,7 @@
     // ─── Diaper Usage ─────────────────────────────────────
     let diaperItemsByResident = {}; // { residentId: [{id, name}] }
     let diaperUsageValues = {};     // { itemId: count }
+    let diaperStatusByItem = {};    // { itemId: 'red'|'yellow'|'ok'|'pending' }
 
     function escapeHtml(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 
@@ -739,6 +751,62 @@
       });
     }
 
+    // 在庫の残り具合を判定する。管理画面と同じ diaper-logic.js を使うので判定がズレない。
+    // 失敗しても日報入力は従来通り動かす（バッジが出ないだけ）＝在庫表示のせいで日報が書けなくなるのを防ぐ。
+    async function loadDiaperStock() {
+      diaperStatusByItem = {};
+      try {
+        const itemIds = Object.values(diaperItemsByResident).flat().map(i => i.id);
+        if (itemIds.length === 0) return;
+        // ⚠️ 行数を無制限に増やさないこと。PostgRESTには db-max-rows のサーバー側ハード上限があり、
+        //    クライアントの .limit() では超えられない（上限変更はSupabaseダッシュボード側の設定）。
+        //    上限に達すると古い行が無言で切り捨てられ、在庫が「実際より多い」方向に狂う
+        //    ＝在庫切れに気づけない側に倒れるため、取得範囲そのものを増えない形にする。
+        // usageの必要範囲は「最新の棚卸し以降」と「直近14日」のうち古い方まで。
+        //  - computeStock: 最新の棚卸し以降の全usageが必要（14日で切ると在庫を過大評価する）
+        //  - avgDaily: 直近14日のみ使用
+        const evRes = await db.from('diaper_events')
+          .select('item_id, type, pieces, event_date').in('item_id', itemIds);
+        if (evRes.error) {
+          console.error('オムツ在庫の取得に失敗（バッジ非表示で続行）:', evRes.error);
+          diaperStatusByItem = {}; return;
+        }
+        const t0 = new Date(); t0.setDate(t0.getDate() - 13);
+        let usageFrom = `${t0.getFullYear()}-${String(t0.getMonth()+1).padStart(2,'0')}-${String(t0.getDate()).padStart(2,'0')}`;
+        const adjustDates = (evRes.data || []).filter(e => e.type === 'adjust').map(e => e.event_date);
+        if (adjustDates.length > 0) {
+          const oldestNeeded = adjustDates.sort()[0];   // 品目ごとに最新棚卸し日が違うので最も古いものに合わせる
+          if (oldestNeeded < usageFrom) usageFrom = oldestNeeded;
+        } else {
+          usageFrom = null;  // 棚卸しが1件もない＝基準0枚から全usageを引く必要がある
+        }
+        let usQuery = db.from('diaper_usage').select('item_id, usage_date, count').in('item_id', itemIds);
+        if (usageFrom) usQuery = usQuery.gte('usage_date', usageFrom);
+        const usRes = await usQuery;
+        // supabase-jsは失敗時にthrowせず{data:null,error}を返すのでcatchでは捕まらない。
+        // 取得が欠けたまま判定すると、在庫が十分でも全品目が赤になりうる（events欠落で在庫がマイナスになる）。
+        // 不正確な警告は現場の信用を失うので、失敗したらバッジを一切出さない。
+        if (usRes.error) {
+          console.error('オムツ在庫の取得に失敗（バッジ非表示で続行）:', usRes.error);
+          diaperStatusByItem = {};
+          return;
+        }
+        const events = evRes.data, usages = usRes.data;
+        const t = new Date();
+        const today = `${t.getFullYear()}-${String(t.getMonth()+1).padStart(2,'0')}-${String(t.getDate()).padStart(2,'0')}`;
+        itemIds.forEach(id => {
+          const ev = (events || []).filter(e => e.item_id === id);
+          const us = (usages || []).filter(u => u.item_id === id);
+          const stock = DiaperLogic.computeStock(ev, us);
+          const days = DiaperLogic.daysLeft(stock, DiaperLogic.avgDaily(us, today));
+          diaperStatusByItem[id] = DiaperLogic.statusOf(days);
+        });
+      } catch (e) {
+        console.error('オムツ在庫の取得に失敗（バッジ非表示で続行）:', e);
+        diaperStatusByItem = {};
+      }
+    }
+
     function renderDiaperStepper(container, residentId) {
       const items = diaperItemsByResident[residentId] || [];
       items.forEach(item => {
@@ -746,12 +814,36 @@
         row.className = 'diaper-stepper-row';
         row.dataset.itemId = item.id;
         const current = diaperUsageValues[item.id] || 0;
+        // 在庫が少ないときだけバッジを出す。ok/pendingは無表示＝平常時の日報の見た目は変わらない。
+        // 現場に発注権限はないため文言はred/yellow共通の「残り少」とし、色だけ分ける。
+        const st = diaperStatusByItem[item.id];
+        // バッジは押せる。見えるだけでは現場が何をすべきか分からず、
+        // 「システムが知っている」という誤った安心感で報告が止まるため、
+        // 既存の【不足品】欄（管理者に届く正規の報告経路）へ1タップで載せられるようにする。
+        const lowBadge = (st === 'red' || st === 'yellow')
+          ? `<button type="button" class="diaper-low-badge ${st}" title="不足品に追加">残り少 ＋不足品</button>` : '';
         row.innerHTML = `
-          <span class="diaper-stepper-name">${escapeHtml(item.name)}</span>
+          <span class="diaper-stepper-name">${escapeHtml(item.name)}${lowBadge}</span>
           <button type="button" class="diaper-stepper-btn" data-op="minus" aria-label="${escapeHtml(item.name)}を1減らす">−</button>
           <span class="diaper-stepper-count">${current}</span>
           <button type="button" class="diaper-stepper-btn" data-op="plus" aria-label="${escapeHtml(item.name)}を1増やす">＋</button>
         `;
+        const badgeEl = row.querySelector('.diaper-low-badge');
+        if (badgeEl) {
+          badgeEl.addEventListener('click', () => {
+            // 同じ品目を二重に載せない（連打・別日再訪でも増えない）
+            if (shortageItems.some(si => si.text === item.name)) {
+              badgeEl.textContent = '記入済み';
+              badgeEl.disabled = true;
+              return;
+            }
+            shortageItems.push({ text: item.name, checked: false });
+            renderShortageList();
+            scheduleAutoSave();
+            badgeEl.textContent = '記入済み';
+            badgeEl.disabled = true;
+          });
+        }
         row.querySelector('[data-op="minus"]').addEventListener('click', () => {
           const v = Math.max(0, (diaperUsageValues[item.id] || 0) - 1);
           diaperUsageValues[item.id] = v;
@@ -1321,7 +1413,7 @@
       const residentRows = residentsData || [];
       // オムツ行と当日の使用実績を先に読み込んでからステッパー込みで描画する
       await loadDiaperItemsForResidents(residentRows);
-      await loadDiaperUsage(dateISO);
+      await Promise.all([loadDiaperUsage(dateISO), loadDiaperStock()]);
       container.innerHTML = '';
       if (residentRows.length === 0) {
         container.innerHTML = `
