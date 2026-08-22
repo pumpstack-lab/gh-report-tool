@@ -6,7 +6,7 @@
   <title>業務日報 入力</title>
   <script src="config.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-  <script src="diaper-logic.js"></script>
+  <script src="diaper-logic.js?v=1"></script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
@@ -743,7 +743,7 @@
       const ids = residentRows.map(r => r.id);
       if (ids.length === 0) return;
       const { data } = await db.from('diaper_items')
-        .select('id, resident_id, name')
+        .select('id, resident_id, name, maker, item_type')
         .in('resident_id', ids).eq('active', true);
       (data || []).forEach(item => {
         if (!diaperItemsByResident[item.resident_id]) diaperItemsByResident[item.resident_id] = [];
@@ -822,22 +822,23 @@
         // 既存の【不足品】欄（管理者に届く正規の報告経路）へ1タップで載せられるようにする。
         const lowBadge = (st === 'red' || st === 'yellow')
           ? `<button type="button" class="diaper-low-badge ${st}" title="不足品に追加">残り少 ＋不足品</button>` : '';
+        const label = DiaperLogic.itemLabel(item);
         row.innerHTML = `
-          <span class="diaper-stepper-name">${escapeHtml(item.name)}${lowBadge}</span>
-          <button type="button" class="diaper-stepper-btn" data-op="minus" aria-label="${escapeHtml(item.name)}を1減らす">−</button>
+          <span class="diaper-stepper-name">${escapeHtml(label)}${lowBadge}</span>
+          <button type="button" class="diaper-stepper-btn" data-op="minus" aria-label="${escapeHtml(label)}を1減らす">−</button>
           <span class="diaper-stepper-count">${current}</span>
-          <button type="button" class="diaper-stepper-btn" data-op="plus" aria-label="${escapeHtml(item.name)}を1増やす">＋</button>
+          <button type="button" class="diaper-stepper-btn" data-op="plus" aria-label="${escapeHtml(label)}を1増やす">＋</button>
         `;
         const badgeEl = row.querySelector('.diaper-low-badge');
         if (badgeEl) {
           badgeEl.addEventListener('click', () => {
             // 同じ品目を二重に載せない（連打・別日再訪でも増えない）
-            if (shortageItems.some(si => si.text === item.name)) {
+            if (shortageItems.some(si => si.text === label)) {
               badgeEl.textContent = '記入済み';
               badgeEl.disabled = true;
               return;
             }
-            shortageItems.push({ text: item.name, checked: false });
+            shortageItems.push({ text: label, checked: false });
             renderShortageList();
             scheduleAutoSave();
             badgeEl.textContent = '記入済み';
