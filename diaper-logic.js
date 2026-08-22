@@ -73,6 +73,16 @@ function itemLabel(item) {
   return item.name || '（品名未設定）';
 }
 
-const _api = { computeStock, avgDaily, daysLeft, statusOf, sortRows, itemLabel };
+// 棚卸しの合計枚数 = 新品袋数 × 1袋枚数 + 半端枚数。
+// 「半端」は開封済み1袋の残り枚数（開封済みが2袋以上ある運用は想定しない）。
+// 保存先は従来通り diaper_events の合計枚数1件で、DBの持ち方は変えない。
+function totalPieces(packs, loose, piecesPerPack) {
+  const p = Math.max(0, Number(packs) || 0);
+  const l = Math.max(0, Number(loose) || 0);
+  const per = Number(piecesPerPack) > 0 ? Number(piecesPerPack) : 1;
+  return p * per + l;
+}
+
+const _api = { computeStock, avgDaily, daysLeft, statusOf, sortRows, itemLabel, totalPieces };
 if (typeof module !== 'undefined' && module.exports) module.exports = _api;
 if (typeof window !== 'undefined') window.DiaperLogic = _api;
