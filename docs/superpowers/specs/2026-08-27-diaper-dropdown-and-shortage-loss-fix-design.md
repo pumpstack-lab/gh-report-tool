@@ -25,7 +25,8 @@
 - 表示値⇔保存値の変換（select値と数値欄の合成、6未満を数値欄に入れた場合の丸め等）は
   純粋関数として `diaper-logic.js` に追加し、`node --test` でテストする
   - `usageToUi(count)` → `{sel: '0'..'5'|'6+', num: count|null}`
-  - `uiToUsage(sel, num)` → count（不正値は安全側に丸める: 負値→0、'6+'でnum<6→6、num>99→99、非数→0）
+  - `uiToUsage(sel, num)` → count（不正値は安全側に丸める: 負値→0、num>99→99。
+    '6+'選択時: num未入力・非数・6未満はすべて→6（0に落とさない）。'0'〜'5'選択時はnumを無視しsel値を使う）
 
 ## B. 「不足品」消失バグ修正（3点セット）
 
