@@ -382,6 +382,16 @@
       color: #888;
     }
     .btn-remove-shortage:active { background: #ffecec; color: #e74c3c; }
+    /* 個人の不足品（各利用者ブロックの下部）。既存【不足品】欄と同じ行UI・同じ操作感 */
+    .personal-shortage-block { margin-top: 8px; padding-top: 6px; border-top: 1px dashed #dde3ea; }
+    .personal-shortage-label { font-size: 12px; font-weight: bold; color: #6b7a90; margin-bottom: 4px; }
+    .personal-shortage-list .shortage-item-row { margin-bottom: 4px; }
+    .btn-add-personal-shortage {
+      display: inline-block; margin-top: 2px; padding: 6px 12px;
+      font-size: 13px; color: #4a90d9; background: #f2f7fd; border: 1px dashed #b8d3f0;
+      border-radius: 8px; font-family: inherit; cursor: pointer;
+    }
+    .btn-add-personal-shortage:active { background: #e3eefb; }
     .btn-add-shortage {
       margin-top: 8px;
       padding: 10px 16px;
@@ -862,6 +872,93 @@
     }
 
 
+    // ─── 個人の不足品（利用者×日付・別テーブル personal_shortage） ───
+    // reports.shortage に乗せない: reports は行まるごと upsert で消失バグ（2026-08-27）を継承するため。
+    // 保存は「変更のあった利用者だけ」「その日付のロードが終わってから」に限定し、
+    // 日付切替中の古いデータで新しい日を上書きしないようにする。
+    let personalShortageByResident = {};   // { residentId: [{text, checked}] }
+    let personalShortageDirty = new Set(); // 保存が必要な residentId
+    let personalShortageLoadedFor = null;  // ロード済みの dateISO（これ以外の日付では保存しない）
+
+    async function loadPersonalShortage(dateISO) {
+      personalShortageLoadedFor = null;
+      personalShortageByResident = {};
+      personalShortageDirty = new Set();
+      const { data, error } = await db.from('personal_shortage')
+        .select('resident_id, items')
+        .eq('gh_num', parseInt(ghNum)).eq('report_date', dateISO);
+      if (error) { console.error('personal_shortage load failed:', error.message); return; }
+      (data || []).forEach(row => {
+        const raw = row.items;
+        const arr = typeof raw === 'string' ? JSON.parse(raw || '[]') : (raw || []);
+        personalShortageByResident[row.resident_id] = arr.map(it => ({ text: it.text || '', checked: !!it.checked }));
+      });
+      personalShortageLoadedFor = dateISO;
+      document.querySelectorAll('.personal-shortage-block').forEach(block => {
+        renderPersonalShortageList(block);
+      });
+    }
+
+    function renderPersonalShortageList(block) {
+      const residentId = block.dataset.residentId;
+      const list = block.querySelector('.personal-shortage-list');
+      const items = personalShortageByResident[residentId] || [];
+      list.innerHTML = '';
+      items.forEach((item, idx) => {
+        const div = document.createElement('div');
+        div.className = 'shortage-item-row';
+        const bullet = document.createElement('span');
+        bullet.className = 'shortage-bullet';
+        bullet.textContent = '・';
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.className = 'shortage-item-input personal-shortage-input';
+        input.value = item.text;
+        input.placeholder = '品目を入力';
+        input.addEventListener('input', (e) => {
+          personalShortageByResident[residentId][idx].text = e.target.value;
+          personalShortageDirty.add(residentId);
+          scheduleAutoSave();
+        });
+        const removeBtn = document.createElement('button');
+        removeBtn.type = 'button';
+        removeBtn.className = 'btn-remove-shortage';
+        removeBtn.textContent = '✕';
+        removeBtn.addEventListener('click', () => {
+          personalShortageByResident[residentId].splice(idx, 1);
+          personalShortageDirty.add(residentId);
+          renderPersonalShortageList(block);
+          scheduleAutoSave();
+        });
+        div.appendChild(bullet);
+        div.appendChild(input);
+        div.appendChild(removeBtn);
+        list.appendChild(div);
+      });
+    }
+
+    function renderPersonalShortage(container, residentId) {
+      const block = document.createElement('div');
+      block.className = 'personal-shortage-block';
+      block.dataset.residentId = residentId;
+      block.innerHTML = `
+        <div class="personal-shortage-label">個人の不足品</div>
+        <div class="personal-shortage-list"></div>
+        <button type="button" class="btn-add-personal-shortage">＋ 項目を追加</button>
+      `;
+      block.querySelector('.btn-add-personal-shortage').addEventListener('click', () => {
+        if (!personalShortageByResident[residentId]) personalShortageByResident[residentId] = [];
+        personalShortageByResident[residentId].push({ text: '', checked: false });
+        personalShortageDirty.add(residentId);
+        renderPersonalShortageList(block);
+        const inputs = block.querySelectorAll('.personal-shortage-input');
+        if (inputs.length > 0) inputs[inputs.length - 1].focus();
+      });
+      renderPersonalShortageList(block);
+      container.appendChild(block);
+    }
+
+
     // ─── Shortage List ────────────────────────────────────
     let shortageItems = []; // [{text, checked}]
 
@@ -1115,13 +1212,47 @@
         if (diaperDelErr) { console.error('diaper_usage delete failed:', diaperDelErr.message); diaperSaveError = diaperSaveError || diaperDelErr; }
       }
 
+      // 個人の不足品: 変更のあった利用者だけ、かつ「この日付のロードが完了している」時だけ保存する。
+      // ロード前に保存すると古い日付の内容で上書きしうる（既存 shortage の消失バグと同型）ため。
+      const personalTouched = personalShortageLoadedFor === dateISO && personalShortageDirty.size > 0;
+      let personalSaveError = null;
+      if (personalTouched) {
+        const dirtyIds = Array.from(personalShortageDirty);
+        const upsertRows = [];
+        const deleteIds = [];
+        dirtyIds.forEach(rid => {
+          const items = (personalShortageByResident[rid] || [])
+            .filter(it => it.text && it.text.trim())
+            .map(it => ({ text: it.text.trim(), checked: !!it.checked }));
+          const entry = document.querySelector(`.resident-entry[data-resident-id="${rid}"]`);
+          const rname = entry ? entry.dataset.name : '';
+          if (items.length > 0) {
+            upsertRows.push({ gh_num: parseInt(ghNum), report_date: dateISO, resident_id: parseInt(rid),
+                              resident_name: rname, items, updated_at: new Date().toISOString() });
+          } else {
+            deleteIds.push(parseInt(rid));
+          }
+        });
+        if (upsertRows.length > 0) {
+          const { error } = await db.from('personal_shortage')
+            .upsert(upsertRows, { onConflict: 'gh_num,report_date,resident_id' });
+          if (error) { console.error('personal_shortage upsert failed:', error.message); personalSaveError = error; }
+        }
+        if (deleteIds.length > 0) {
+          const { error } = await db.from('personal_shortage').delete()
+            .eq('gh_num', parseInt(ghNum)).eq('report_date', dateISO).in('resident_id', deleteIds);
+          if (error) { console.error('personal_shortage delete failed:', error.message); personalSaveError = personalSaveError || error; }
+        }
+        if (!personalSaveError) dirtyIds.forEach(rid => personalShortageDirty.delete(rid));
+      }
+
       if (!hasContent && !existing) {
-        // 日報本文が空でもオムツだけ入力された日は保存結果をインジケーターに出す
-        if (diaperUpsertRows.length > 0 || diaperDeleteItemIds.length > 0) {
+        // 日報本文が空でもオムツ・個人の不足品だけ入力された日は保存結果をインジケーターに出す
+        if (diaperUpsertRows.length > 0 || diaperDeleteItemIds.length > 0 || personalTouched) {
           const ind = document.getElementById('draft-indicator');
-          if (diaperSaveError) {
+          if (diaperSaveError || personalSaveError) {
             ind.style.color = '#e74c3c';
-            ind.textContent = '⚠️ 保存失敗: ' + diaperSaveError.message;
+            ind.textContent = '⚠️ 保存失敗: ' + (diaperSaveError || personalSaveError).message;
           } else {
             ind.style.color = '';
             ind.textContent = '保存しました ✓';
@@ -1144,7 +1275,7 @@
       }, { onConflict: 'gh_num,report_date' });
 
       const ind = document.getElementById('draft-indicator');
-      const saveFailure = error || diaperSaveError;
+      const saveFailure = error || diaperSaveError || personalSaveError;
       if (saveFailure) {
         ind.style.color = '#e74c3c';
         ind.textContent = '⚠️ 保存失敗: ' + saveFailure.message;
@@ -1164,7 +1295,7 @@
 
       document.getElementById('existing-badge').textContent = data ? '記録あり ✓' : '';
 
-      await loadDiaperUsage(dateISO);
+      await Promise.all([loadDiaperUsage(dateISO), loadPersonalShortage(dateISO)]);
       document.querySelectorAll('.diaper-stepper-row').forEach(row => {
         const v = diaperUsageValues[row.dataset.itemId] || 0;
         row.querySelector('.diaper-stepper-count').textContent = v;
@@ -1414,7 +1545,7 @@
       const residentRows = residentsData || [];
       // オムツ行と当日の使用実績を先に読み込んでからステッパー込みで描画する
       await loadDiaperItemsForResidents(residentRows);
-      await Promise.all([loadDiaperUsage(dateISO), loadDiaperStock()]);
+      await Promise.all([loadDiaperUsage(dateISO), loadDiaperStock(), loadPersonalShortage(dateISO)]);
       container.innerHTML = '';
       if (residentRows.length === 0) {
         container.innerHTML = `
@@ -1433,11 +1564,13 @@
             <textarea placeholder="${escapeHtml(r.name)}の様子を記入（帰宅〜朝の流れ）..."></textarea>
           `;
           renderDiaperStepper(div, r.id);
+          renderPersonalShortage(div, r.id);
           container.appendChild(div);
         });
         container.querySelectorAll('textarea').forEach(ta => {
           ta.addEventListener('input', function() { autoExpand(this); scheduleAutoSave(); });
         });
+        document.querySelectorAll('.personal-shortage-block').forEach(block => renderPersonalShortageList(block));
       }
 
       // マハロ（gh=6）の場合は短期入所枠を追加
