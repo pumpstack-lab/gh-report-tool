@@ -937,7 +937,10 @@
       });
     }
 
-    function renderPersonalShortage(container, residentId) {
+    function renderPersonalShortage(container, residentIdArg) {
+      // dataset 経由の文字列と residents.id の数値が混在すると dirty/map のキーが二重になり、
+      // 同一キーを2回 upsert して PG が拒否する（実測）。キーは常に文字列に揃える。
+      const residentId = String(residentIdArg);
       const block = document.createElement('div');
       block.className = 'personal-shortage-block';
       block.dataset.residentId = residentId;
