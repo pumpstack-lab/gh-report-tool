@@ -384,11 +384,14 @@
     .btn-remove-shortage:active { background: #ffecec; color: #e74c3c; }
     /* 個人の不足品（各利用者ブロックの下部）。既存【不足品】欄と同じ行UI・同じ操作感 */
     .personal-shortage-block { margin-top: 8px; padding-top: 6px; border-top: 1px dashed #dde3ea; }
-    .personal-shortage-label { font-size: 12px; font-weight: bold; color: #6b7a90; margin-bottom: 4px; }
+    /* ラベルは 4.5:1 を満たす濃さ（#6b7a90 は 4.36 で不足・実測） */
+    .personal-shortage-label { font-size: 12px; font-weight: bold; color: #5b6b82; margin-bottom: 4px; }
     .personal-shortage-list .shortage-item-row { margin-bottom: 4px; }
+    /* 既存【不足品】の追加ボタンと同じ系統。文字色は 4.5:1 を満たす #2f6fb8（#4a90d9 は 3.1）。
+       タップ領域は 40px 以上（年配職員のスマホ操作を想定）。 */
     .btn-add-personal-shortage {
-      display: inline-block; margin-top: 2px; padding: 6px 12px;
-      font-size: 13px; color: #4a90d9; background: #f2f7fd; border: 1px dashed #b8d3f0;
+      display: inline-flex; align-items: center; min-height: 40px; margin-top: 2px; padding: 8px 14px;
+      font-size: 13px; font-weight: bold; color: #2f6fb8; background: #f0f6ff; border: 1.5px dashed #4a90d9;
       border-radius: 8px; font-family: inherit; cursor: pointer;
     }
     .btn-add-personal-shortage:active { background: #e3eefb; }
