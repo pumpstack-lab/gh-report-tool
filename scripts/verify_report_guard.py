@@ -26,6 +26,16 @@ RESIDENTS = [
     {"id": 102, "name": "佐藤花子", "gh_num": GH, "active": True, "sort_order": 2},
 ]
 
+# ケース5用: loadDiaperUsage が diaper_usage への GET を実際に発行する条件
+# （diaperItemIds.length > 0）を満たすため、利用者に紐づくオムツ品目を1件用意する。
+# personal_shortage_items へのGET移行（2026-09-04）により、loadDateData の復元待ちを
+# 遅延させる唯一の手段が diaper_usage の delay になったため必須（品目が無いと
+# loadDiaperUsage が即resolveし、reportLoadedFor が復元完了前に立ってしまう）。
+DIAPER_ITEMS = [
+    {"id": "diaper-item-1", "resident_id": 101, "name": "テープ止め", "maker": "検証メーカー",
+     "item_type": "diaper", "active": True},
+]
+
 EXISTING_REPORT = {
     "id": 1,
     "gh_num": GH,
@@ -118,7 +128,11 @@ def setup_routes(page, *, reports_delay_ms=0, reports_fail=False, report_row=Non
             route.fulfill(status=200, content_type="application/json", body="[]")
             return
 
-        if "/rest/v1/diaper_items" in url or "/rest/v1/diaper_events" in url:
+        if "/rest/v1/diaper_items" in url:
+            route.fulfill(status=200, content_type="application/json", body=json.dumps(DIAPER_ITEMS))
+            return
+
+        if "/rest/v1/diaper_events" in url:
             route.fulfill(status=200, content_type="application/json", body="[]")
             return
 
@@ -374,12 +388,14 @@ def case4_date_switch_no_stale_save(pw):
 
 
 def case5_restore_gap_no_partial_overwrite(pw):
-    print("\n--- ケース5: reports即応答でもフォーム復元(diaper/personal_shortage)完了前は保存されない ---")
+    print("\n--- ケース5: reports即応答でもフォーム復元(diaper)完了前は保存されない ---")
     # code-review指摘(2026-09-04): reportsのSELECT直後にreportLoadedForを立てると、
-    # 復元用await（loadDiaperUsage/loadPersonalShortage）の隙間に打鍵された場合、
+    # 復元用await（loadDiaperUsage）の隙間に打鍵された場合、
     # canSaveが真になり「半分しか復元されていないフォーム」で上書き保存が飛んでしまう
-    # ＝今回防ぎたい事故そのもの。reportsは即応答・diaper/personal_shortageだけ1.5秒遅延させ、
+    # ＝今回防ぎたい事故そのもの。reportsは即応答・diaperだけ1.5秒遅延させ、
     # その隙間の入力で保存が飛ばないこと／復元完了後のupsert bodyに既存本文が全部残ることを検証する。
+    # （personal_shortage_items は2026-09-04の蓄積型移行でGHごと1回だけ取得する方式になり、
+    #  loadDateDataの復元待ちから外れたため、ここでは扱わない）
     browser = pw.chromium.launch()
     page = new_page(browser)
     writes = setup_routes(page, reports_delay_ms=0, report_row=EXISTING_REPORT, restore_delay_ms=1500)
