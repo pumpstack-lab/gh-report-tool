@@ -7,6 +7,7 @@
   <script src="config.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="diaper-logic.js?v=2"></script>
+  <script src="scripts/report_guard.js?v=1"></script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
@@ -277,6 +278,21 @@
       height: 20px;
     }
 
+    /* ロード未完了・失敗時の全体ガード表示（2026-09-04 空上書き防止） */
+    .load-guard-banner {
+      display: none;
+      background: #fdecea;
+      color: #c0392b;
+      font-size: 13px;
+      font-weight: bold;
+      text-align: center;
+      padding: 10px 16px;
+      margin: 0 16px 14px;
+      border-radius: 10px;
+      border: 1.5px solid #f0b8b0;
+    }
+    .load-guard-banner.is-visible { display: block; }
+
     .modal-overlay {
       position: fixed;
       inset: 0;
@@ -510,6 +526,8 @@
     </div>
   </div>
 
+  <div class="load-guard-banner" id="load-guard-banner"></div>
+
   <div class="section date-card-section" id="date-card-section">
     <div class="date-card-inner">
       <span class="date-card-icon">📅</span>
@@ -709,7 +727,35 @@
     let staffList = [];       // [{id,last_name,first_name,staff_type}]
     let holidaySet = new Set(); // 'YYYY-MM-DD'
     let workerRows = [];      // [{staff_id, work_type}]
+    // 空上書き防止ガード（2026-09-04）: reports本体（担当者/特記事項/不足品/写真）用。
+    // 「個人の不足品」の loadedFor/Dirty とは別管理（保存先テーブルが別のため）。
+    let reportLoadedFor = null; // ロードが成功して完了している日付（未完了/失敗なら null）
+    let reportDirty = false;    // ロード後にユーザー入力があったか
     refreshDateDisplay();
+
+    function setLoadGuardBanner(message) {
+      const banner = document.getElementById('load-guard-banner');
+      if (!banner) return;
+      if (message) {
+        banner.textContent = message;
+        banner.classList.add('is-visible');
+      } else {
+        banner.textContent = '';
+        banner.classList.remove('is-visible');
+      }
+    }
+
+    function setFormInputsDisabled(isDisabled) {
+      document.querySelectorAll(
+        '#workers-container select, #btn-add-worker, ' +
+        '.resident-entry textarea, .short-stay-entry input, .short-stay-entry textarea, ' +
+        '#shortage-list input, #shortage-list .btn-remove-shortage, #btn-add-shortage, ' +
+        '.diaper-stepper-btn, #photo-upload-area'
+      ).forEach(el => {
+        if ('disabled' in el) el.disabled = isDisabled;
+        else el.style.pointerEvents = isDisabled ? 'none' : '';
+      });
+    }
 
     // iOS: input が上に重なってタップで開く / PC: showPicker() で明示的に開く
     document.getElementById('date-card-section').addEventListener('click', () => {
@@ -1198,6 +1244,12 @@
 
     // ─── Auto-save ────────────────────────────────────────
     function scheduleAutoSave() {
+      reportDirty = true;
+      if (!ReportGuard.canSaveReport({ loadedFor: reportLoadedFor, dateISO: dateEl.value, dirty: reportDirty })) {
+        // ロード未完了/失敗の日付に入力があった。偽の「保存しました」を出さず、保存もしない。
+        setLoadGuardBanner('読み込み中です。表示が終わってから入力してください');
+        return;
+      }
       clearTimeout(saveTimer);
       saveTimer = setTimeout(saveCurrentData, 800);
     }
@@ -1207,6 +1259,13 @@
     }
 
     async function saveCurrentDataForDate(dateISO) {
+      const guardState = { loadedFor: reportLoadedFor, dateISO, dirty: reportDirty };
+      if (!ReportGuard.canSaveReport(guardState)) {
+        if (ReportGuard.shouldWarnUnsaved(guardState)) {
+          setLoadGuardBanner('読み込み中です。表示が終わってから入力してください');
+        }
+        return;
+      }
       const reporter = currentReporterText();
       const workersData = workerRows
         .filter(r => r.staff_id)
@@ -1234,6 +1293,13 @@
         residentsData[key] = textVal;
         if (nameVal || textVal.trim()) hasContent = true;
       });
+
+      // 送信直前（DOM値をスナップショットした直後）にdirtyを下ろす。
+      // 保存成功後に下ろすと、送信中（await中）に打った最後の1文字がdirty=trueのまま
+      // タイマーで次のsaveCurrentDataForDateが走った時にcanSaveがguardを通らず、
+      // 未保存のまま「保存しました」だけ出る事故になる（2026-09-04 Getter指摘）。
+      // 失敗時は下の各分岐でdirty=trueに戻し、次の自動保存タイマーで再送されるようにする。
+      reportDirty = false;
 
       // 既存レコードがある場合は担当者名の変更（空欄含む）も保存する
       const { data: existing } = await db.from('reports').select('id')
@@ -1303,6 +1369,7 @@
           if (diaperSaveError || personalSaveError) {
             ind.style.color = '#e74c3c';
             ind.textContent = '⚠️ 保存失敗: ' + (diaperSaveError || personalSaveError).message;
+            reportDirty = true; // 失敗分を次の自動保存で再送できるようにする
           } else if (personalUnsaved) {
             ind.style.color = '#e74c3c';
             ind.textContent = '⚠ 個人の不足品は保存されていません（再読み込みしてください）';
@@ -1332,6 +1399,7 @@
       if (saveFailure) {
         ind.style.color = '#e74c3c';
         ind.textContent = '⚠️ 保存失敗: ' + saveFailure.message;
+        reportDirty = true; // 失敗分を次の自動保存で再送できるようにする
       } else if (personalUnsaved) {
         ind.style.color = '#e74c3c';
         ind.textContent = '⚠ 個人の不足品は保存されていません（再読み込みしてください）';
@@ -1345,10 +1413,24 @@
     }
 
     async function loadDateData(dateISO) {
-      const { data } = await db.from('reports').select('*')
+      reportLoadedFor = null;
+      reportDirty = false;
+      setLoadGuardBanner(null);
+      setFormInputsDisabled(true);
+      const { data, error } = await db.from('reports').select('*')
         .eq('gh_num', parseInt(ghNum))
         .eq('report_date', dateISO)
         .maybeSingle();
+
+      if (error) {
+        console.error('reports load failed:', error.message);
+        setFormInputsDisabled(true);
+        setLoadGuardBanner('読み込みに失敗しました。再読み込みしてください（入力は保存されません）');
+        return;
+      }
+      reportLoadedFor = dateISO;
+      setFormInputsDisabled(false);
+      setLoadGuardBanner(null);
 
       document.getElementById('existing-badge').textContent = data ? '記録あり ✓' : '';
 
@@ -1589,14 +1671,24 @@
       const dateISO = dateEl.value;
       const container = document.getElementById('residents-container');
       container.innerHTML = '<div style="text-align:center;padding:20px;color:#aaa;font-size:14px">読み込み中...</div>';
+      reportLoadedFor = null;
+      reportDirty = false;
 
       await initStaffAndHolidays();
       updateHolidayIndicator();
 
-      const [{ data: residentsData }, { data: reportData }] = await Promise.all([
+      const [{ data: residentsData }, { data: reportData, error: reportError }] = await Promise.all([
         db.from('residents').select('id, name').eq('gh_num', parseInt(ghNum)).eq('active', true).order('sort_order'),
         db.from('reports').select('*').eq('gh_num', parseInt(ghNum)).eq('report_date', dateISO).maybeSingle()
       ]);
+
+      if (reportError) {
+        console.error('reports load failed:', reportError.message);
+        container.innerHTML = '<div style="text-align:center;padding:20px;color:#aaa;font-size:14px">読み込みに失敗しました</div>';
+        setLoadGuardBanner('読み込みに失敗しました。再読み込みしてください（入力は保存されません）');
+        setFormInputsDisabled(true);
+        return;
+      }
 
       // Render residents
       const residentRows = residentsData || [];
@@ -1686,6 +1778,9 @@
         uploadedPhotos = [];
         renderPhotoPreview();
       }
+      reportLoadedFor = dateISO;
+      setFormInputsDisabled(false);
+      setLoadGuardBanner(null);
     }
     bindPhotoInput();
     init();
