@@ -62,7 +62,7 @@ def start_server():
     return proc
 
 
-def setup_routes(page, *, reports_delay_ms=0, reports_fail=False, report_row=None, write_requests=None, writes_delay_ms=0):
+def setup_routes(page, *, reports_delay_ms=0, reports_fail=False, report_row=None, write_requests=None, writes_delay_ms=0, restore_delay_ms=0):
     """全RESTエンドポイントをモックし、reports に対するPOST/PATCH本数を記録する配列を返す。
 
     ⚠️ 遅延は Python 側の time.sleep ではなく、モック応答ヘッダに遅延時間を埋め込み、
@@ -118,12 +118,24 @@ def setup_routes(page, *, reports_delay_ms=0, reports_fail=False, report_row=Non
             route.fulfill(status=200, content_type="application/json", body="[]")
             return
 
-        if "/rest/v1/diaper_items" in url or "/rest/v1/diaper_usage" in url or "/rest/v1/diaper_events" in url:
+        if "/rest/v1/diaper_items" in url or "/rest/v1/diaper_events" in url:
             route.fulfill(status=200, content_type="application/json", body="[]")
             return
 
+        if "/rest/v1/diaper_usage" in url:
+            headers = {"content-type": "application/json"}
+            if restore_delay_ms and method == "GET":
+                headers["x-mock-delay-ms"] = str(restore_delay_ms)
+                headers["access-control-expose-headers"] = "x-mock-delay-ms"
+            route.fulfill(status=200, headers=headers, body="[]")
+            return
+
         if "/rest/v1/personal_shortage" in url:
-            route.fulfill(status=200, content_type="application/json", body="[]")
+            headers = {"content-type": "application/json"}
+            if restore_delay_ms and method == "GET":
+                headers["x-mock-delay-ms"] = str(restore_delay_ms)
+                headers["access-control-expose-headers"] = "x-mock-delay-ms"
+            route.fulfill(status=200, headers=headers, body="[]")
             return
 
         route.fulfill(status=200, content_type="application/json", body="[]")
@@ -361,6 +373,69 @@ def case4_date_switch_no_stale_save(pw):
     return ok_no_write_on_clean_switch and ok_no_write_during_new_load
 
 
+def case5_restore_gap_no_partial_overwrite(pw):
+    print("\n--- ケース5: reports即応答でもフォーム復元(diaper/personal_shortage)完了前は保存されない ---")
+    # code-review指摘(2026-09-04): reportsのSELECT直後にreportLoadedForを立てると、
+    # 復元用await（loadDiaperUsage/loadPersonalShortage）の隙間に打鍵された場合、
+    # canSaveが真になり「半分しか復元されていないフォーム」で上書き保存が飛んでしまう
+    # ＝今回防ぎたい事故そのもの。reportsは即応答・diaper/personal_shortageだけ1.5秒遅延させ、
+    # その隙間の入力で保存が飛ばないこと／復元完了後のupsert bodyに既存本文が全部残ることを検証する。
+    browser = pw.chromium.launch()
+    page = new_page(browser)
+    writes = setup_routes(page, reports_delay_ms=0, report_row=EXISTING_REPORT, restore_delay_ms=1500)
+    page.goto(f"{BASE}/report.html?gh={GH}&date={DATE}", wait_until="domcontentloaded")
+    page.wait_for_function("() => reportLoadedFor === '2026-09-04'", timeout=5000)
+
+    # 日付切替でloadDateDataを起動（reportsは即応答、diaper/personal_shortageが1.5秒遅延する）
+    writes.clear()
+    page.unroute("**/rest/v1/**")
+    setup_routes(page, reports_delay_ms=0, report_row=EXISTING_REPORT, write_requests=writes, restore_delay_ms=1500)
+    page.evaluate("document.getElementById('report-date').value = '2026-09-05'")
+    page.evaluate("document.getElementById('report-date').dispatchEvent(new Event('change'))")
+
+    # reports SELECTは即返るが、復元用awaitがまだ終わっていない（reportLoadedForはnullのはず）
+    page.wait_for_function("() => reportLoadedFor === null", timeout=5000)
+    still_pending = page.evaluate("() => reportLoadedFor === null")
+    record("reports即応答後もフォーム復元完了までreportLoadedForはnullのまま", still_pending)
+
+    ta = page.locator(".resident-entry textarea").first
+    ta.evaluate("el => { el.disabled = false; el.value = '復元中の緊急入力'; el.dispatchEvent(new Event('input', {bubbles:true})); }")
+
+    page.wait_for_timeout(1200)  # 800ms自動保存タイマー分待つが、復元(1.5秒delay)はまだ終わっていないはず
+    ok_no_write_during_restore = len(writes) == 0
+    record("フォーム復元中の入力では保存リクエストが飛ばない", ok_no_write_during_restore, f"実際: {len(writes)}本")
+
+    # 復元完了まで待つ
+    page.wait_for_function("() => reportLoadedFor === '2026-09-05'", timeout=5000)
+    # 復元完了時点でDOMはサーバー内容と一致しているはず（さっきの緊急入力は復元で上書きされ破棄される）
+    restored_val = ta.input_value()
+    record("復元完了時にDOMがサーバー内容に一致している（復元中の入力は破棄される）", restored_val == "既存の本文（山田さん）", restored_val)
+
+    # 復元完了後にあらためて入力すると保存される。bodyに他利用者の既存本文が全部残っていること
+    ta.fill("復元完了後の新しい本文")
+    ta.dispatch_event("input")
+    page.wait_for_timeout(1200)
+    ok_one_write_after_restore = len(writes) == 1
+    record("復元完了後の入力ではupsertが1本飛ぶ", ok_one_write_after_restore, f"実際: {len(writes)}本")
+
+    residents_in_body = {}
+    if writes:
+        body = writes[0]["body"]
+        row = body[0] if isinstance(body, list) else body
+        residents_in_body = row.get("residents", {})
+    preserved = residents_in_body.get("佐藤花子") == "既存の本文（佐藤さん）"
+    record("復元完了後のupsert bodyに既存本文が全部残っている（佐藤さん分）", preserved, json.dumps(residents_in_body, ensure_ascii=False))
+
+    browser.close()
+    return (
+        still_pending
+        and ok_no_write_during_restore
+        and restored_val == "既存の本文（山田さん）"
+        and ok_one_write_after_restore
+        and preserved
+    )
+
+
 def screenshot_widths(pw):
     print("\n--- スクリーンショット（3幅・赤注意文の見切れ確認） ---")
     browser = pw.chromium.launch()
@@ -385,6 +460,7 @@ def main():
             r2b = case2b_keystroke_during_inflight_save_not_lost(pw)
             r3 = case3_fetch_failure_disables_inputs(pw)
             r4 = case4_date_switch_no_stale_save(pw)
+            r5 = case5_restore_gap_no_partial_overwrite(pw)
             screenshot_widths(pw)
     finally:
         server.terminate()
@@ -397,7 +473,7 @@ def main():
         print(f"[{mark}] {name}")
         if not ok:
             all_ok = False
-    print(f"\nケース1: {'PASS' if r1 else 'FAIL'} / ケース2: {'PASS' if r2 else 'FAIL'} / ケース2B: {'PASS' if r2b else 'FAIL'} / ケース3: {'PASS' if r3 else 'FAIL'} / ケース4: {'PASS' if r4 else 'FAIL'}")
+    print(f"\nケース1: {'PASS' if r1 else 'FAIL'} / ケース2: {'PASS' if r2 else 'FAIL'} / ケース2B: {'PASS' if r2b else 'FAIL'} / ケース3: {'PASS' if r3 else 'FAIL'} / ケース4: {'PASS' if r4 else 'FAIL'} / ケース5: {'PASS' if r5 else 'FAIL'}")
     sys.exit(0 if all_ok else 1)
 
 

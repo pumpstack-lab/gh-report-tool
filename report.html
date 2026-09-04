@@ -1428,9 +1428,6 @@
         setLoadGuardBanner('読み込みに失敗しました。再読み込みしてください（入力は保存されません）');
         return;
       }
-      reportLoadedFor = dateISO;
-      setFormInputsDisabled(false);
-      setLoadGuardBanner(null);
 
       document.getElementById('existing-badge').textContent = data ? '記録あり ✓' : '';
 
@@ -1482,6 +1479,15 @@
         uploadedPhotos = [];
         renderPhotoPreview();
       }
+      // フォーム全体（担当者/特記事項/不足品/短期入所/写真/オムツ/個人の不足品）の復元が
+      // 完了した“ここ”で初めて保存可能にする。SELECT直後にreportLoadedForを立てると、
+      // 復元用awaitの隙間（loadDiaperUsage/loadPersonalShortage）で打鍵された場合に
+      // 半分だけ復元された状態のフォームで上書き保存が飛んでしまう
+      // （2026-09-04 code-review指摘・防ぎたい事故そのもの）。
+      reportLoadedFor = dateISO;
+      reportDirty = false; // ここでDOMはサーバー内容と一致済みなので、ロード中の入力(blocked)は破棄してよい
+      setFormInputsDisabled(false);
+      setLoadGuardBanner(null);
     }
 
     // ─── Summary Modal ────────────────────────────────────
