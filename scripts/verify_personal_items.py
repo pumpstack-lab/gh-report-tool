@@ -47,7 +47,7 @@ def start_server():
     return proc
 
 
-def setup_routes(page, *, items_delay_ms=0, items_fail=False, items_rows=None, write_requests=None):
+def setup_routes(page, *, items_delay_ms=0, items_fail=False, items_abort=False, items_rows=None, write_requests=None):
     if write_requests is None:
         write_requests = []
     if items_rows is None:
@@ -60,6 +60,12 @@ def setup_routes(page, *, items_delay_ms=0, items_fail=False, items_rows=None, w
 
         if "/rest/v1/personal_shortage_items" in url:
             if method == "GET":
+                if items_abort:
+                    # fetch() 自体を失敗させる（ネットワーク例外・supabase-js内部エラー相当）。
+                    # items_fail=True（HTTP 500応答）とは別経路: こちらは {data, error} すら返らず
+                    # await が reject する。loadPersonalItemsOnce() の try/catch を検証する。
+                    route.abort("failed")
+                    return
                 if items_fail:
                     route.fulfill(status=500, body=json.dumps({"message": "mock failure"}))
                     return
@@ -198,6 +204,32 @@ def case2_load_failure_shows_red_banner(pw):
     return banner_visible and "読み込めませんでした" in banner_text and add_disabled
 
 
+def case2b_load_exception_shows_red_banner(pw):
+    print("\n--- ケース2b: 取得が例外(ネットワークエラー等)で失敗しても赤帯・追加不可 ---")
+    # 2026-09-04 code-review指摘: {error}を返さず例外を投げた場合、未処理rejectionになり
+    # 追加ボタンが永久にdisabledのまま赤帯も出ない事故になる。loadPersonalItemsOnce()の
+    # try/catchで既存の失敗経路(personalItemsUnavailable=true)に合流することを検証する。
+    browser = pw.chromium.launch()
+    page = new_page(browser)
+    setup_routes(page, items_abort=True)
+    page.goto(f"{BASE}/report.html?gh={GH}&date={DATE}", wait_until="domcontentloaded")
+    # ネットワーク例外はブラウザ側で指数バックオフ再試行が入るため確定まで数秒かかる
+    # （実測: 1s/2s/4s間隔で再試行し約7〜8秒で確定）。固定sleepではなく状態変化を待つ。
+    page.wait_for_function("() => personalItemsUnavailable === true", timeout=15000)
+
+    banner = page.locator(".personal-items-block .personal-items-unavailable-msg").first
+    banner_visible = banner.is_visible()
+    banner_text = banner.inner_text() if banner_visible else ""
+    record("例外発生時も赤帯「希望品を読み込めませんでした」が表示される",
+           banner_visible and "読み込めませんでした" in banner_text, banner_text)
+
+    add_disabled = page.locator(".personal-items-block .btn-add-personal-item").first.is_disabled()
+    record("例外発生時も追加ボタンがdisabled", add_disabled)
+
+    browser.close()
+    return banner_visible and "読み込めませんでした" in banner_text and add_disabled
+
+
 def case3_date_switch_does_not_refetch(pw):
     print("\n--- ケース3: 日付切替で個人の希望品は再取得されない（GHごと1回のみ） ---")
     browser = pw.chromium.launch()
@@ -225,6 +257,40 @@ def case3_date_switch_does_not_refetch(pw):
     return counts["n"] == 0
 
 
+def case4_duplicate_item_name_blocked(pw):
+    print("\n--- ケース4: 同名（trim後完全一致）の重複追加はINSERTせず「すでに登録されています」 ---")
+    # ネイト精査指摘（2026-09-04）: サーバー側にunique制約が無いため、フロント側で
+    # 未購入リストとの完全一致を見て重複INSERTを防ぐ。入力値は残す。
+    browser = pw.chromium.launch()
+    page = new_page(browser)
+    writes = setup_routes(page, items_rows=OPEN_ITEMS)
+    page.goto(f"{BASE}/report.html?gh={GH}&date={DATE}", wait_until="domcontentloaded")
+    page.wait_for_selector(".personal-items-block .personal-item-row", timeout=5000)
+
+    input_el = page.locator(".personal-items-block .personal-item-input").first
+    add_btn = page.locator(".personal-items-block .btn-add-personal-item").first
+
+    # 既存の未購入品目「歯ブラシ」と同じ名前を追加しようとする
+    input_el.fill("歯ブラシ")
+    add_btn.click()
+    page.wait_for_timeout(400)
+
+    ok_no_insert = len(writes) == 0
+    record("同名追加でINSERTが飛ばない", ok_no_insert, f"実際: {len(writes)}本")
+
+    err = page.locator(".personal-items-block .personal-item-add-error").first
+    err_visible = err.is_visible()
+    err_text = err.inner_text() if err_visible else ""
+    record("「すでに登録されています」が表示される",
+           err_visible and "すでに登録されています" in err_text, err_text)
+
+    input_preserved = input_el.input_value() == "歯ブラシ"
+    record("重複エラー時は入力値が残る", input_preserved, input_el.input_value())
+
+    browser.close()
+    return ok_no_insert and err_visible and "すでに登録されています" in err_text and input_preserved
+
+
 def screenshot_widths(pw):
     print("\n--- スクリーンショット（3幅） ---")
     browser = pw.chromium.launch()
@@ -247,7 +313,9 @@ def main():
         with sync_playwright() as pw:
             r1 = case1_add_disabled_until_loaded_then_insert(pw)
             r2 = case2_load_failure_shows_red_banner(pw)
+            r2b = case2b_load_exception_shows_red_banner(pw)
             r3 = case3_date_switch_does_not_refetch(pw)
+            r4 = case4_duplicate_item_name_blocked(pw)
             screenshot_widths(pw)
     finally:
         server.terminate()
@@ -259,7 +327,9 @@ def main():
         print(f"[{'PASS' if ok else 'FAIL'}] {name}")
         if not ok:
             all_ok = False
-    print(f"\nケース1: {'PASS' if r1 else 'FAIL'} / ケース2: {'PASS' if r2 else 'FAIL'} / ケース3: {'PASS' if r3 else 'FAIL'}")
+    print(f"\nケース1: {'PASS' if r1 else 'FAIL'} / ケース2: {'PASS' if r2 else 'FAIL'} / "
+          f"ケース2b: {'PASS' if r2b else 'FAIL'} / ケース3: {'PASS' if r3 else 'FAIL'} / "
+          f"ケース4: {'PASS' if r4 else 'FAIL'}")
     sys.exit(0 if all_ok else 1)
 
 

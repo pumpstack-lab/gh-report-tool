@@ -961,31 +961,35 @@
     async function loadPersonalItemsOnce() {
       // GHごとに1回だけ。日付切替では呼ばない（このコメントを見て日付切替ハンドラから
       // 呼び出しを追加しないこと。呼ぶと「日付に依存しない」設計が壊れる）。
+      // ネットワーク例外・supabase-js内部エラー等でここが投げた場合、呼び出し元でawaitしていないと
+      // 未処理rejectionになり「追加ボタンが永久にdisabledのまま赤帯も出ない」事故になる
+      // （2026-09-04 code-review指摘）。error分岐と同じ失敗経路に合流させ、必ず赤帯を出す。
       setPersonalItemsLoadingDisabled(true);
-      const { data, error } = await db.from('personal_shortage_items')
-        .select('id, resident_id, resident_name, item_text, requested_on')
-        .eq('gh_num', parseInt(ghNum)).is('purchased_at', null)
-        .order('resident_id').order('requested_on').order('id');
-      if (error) {
-        console.error('personal_shortage_items load failed:', error.message);
+      try {
+        const { data, error } = await db.from('personal_shortage_items')
+          .select('id, resident_id, resident_name, item_text, requested_on')
+          .eq('gh_num', parseInt(ghNum)).is('purchased_at', null)
+          .order('resident_id').order('requested_on').order('id');
+        if (error) throw error;
+        const next = {};
+        (data || []).forEach(row => {
+          const rid = String(row.resident_id);
+          if (!next[rid]) next[rid] = [];
+          next[rid].push({ id: row.id, text: row.item_text, requestedOn: row.requested_on });
+        });
+        personalItemsByResident = next;
+        personalItemsLoaded = true;
+        personalItemsUnavailable = false;
+        document.querySelectorAll('.personal-items-block').forEach(block => renderPersonalItemsList(block));
+        setPersonalItemsUnavailable(false);
+        setPersonalItemsLoadingDisabled(false);
+      } catch (err) {
+        console.error('personal_shortage_items load failed:', err && err.message);
         personalItemsByResident = {};
         personalItemsLoaded = false;
         personalItemsUnavailable = true;
         setPersonalItemsUnavailable(true);
-        return;
       }
-      const next = {};
-      (data || []).forEach(row => {
-        const rid = String(row.resident_id);
-        if (!next[rid]) next[rid] = [];
-        next[rid].push({ id: row.id, text: row.item_text, requestedOn: row.requested_on });
-      });
-      personalItemsByResident = next;
-      personalItemsLoaded = true;
-      personalItemsUnavailable = false;
-      document.querySelectorAll('.personal-items-block').forEach(block => renderPersonalItemsList(block));
-      setPersonalItemsUnavailable(false);
-      setPersonalItemsLoadingDisabled(false);
     }
 
     function fmtMD(dateISOStr) {
@@ -1033,6 +1037,15 @@
       const errEl = block.querySelector('.personal-item-add-error');
       const text = input.value.trim();
       if (!text) return;
+      // 同じ利用者の未購入リストに同名（trim後の完全一致）が既にあれば重複INSERTしない
+      // （ネイト精査指摘・2026-09-04）。サーバー側にはunique制約が無いため、フロント側で防ぐ。
+      const existingItems = personalItemsByResident[residentId] || [];
+      if (existingItems.some(it => it.text === text)) {
+        errEl.style.display = '';
+        errEl.textContent = 'すでに登録されています';
+        // 入力値は残す（設計書§4と同じ方針）
+        return;
+      }
       addBtn.disabled = true;
       input.disabled = true;
       errEl.style.display = 'none';
@@ -1069,7 +1082,7 @@
         <div class="personal-items-label">個人の希望品</div>
         <div class="personal-items-list"></div>
         <div class="personal-item-add-row">
-          <input type="text" class="personal-item-input" placeholder="希望品を追加">
+          <input type="text" class="personal-item-input" placeholder="希望品を追加" maxlength="100">
           <button type="button" class="btn-add-personal-item">追加</button>
         </div>
         <div class="personal-item-add-error" style="display:none;"></div>
@@ -1704,8 +1717,11 @@
       await Promise.all([loadDiaperUsage(dateISO), loadDiaperStock()]);
       // 個人の希望品はここで待たない（await しない）。resident-entry のDOMを先に描画し、
       // 「取得完了まで追加ボタンdisabled」を実際にユーザーへ見せてからバックグラウンドで反映する。
-      const personalItemsPromise = (!personalItemsLoaded && !personalItemsUnavailable)
-        ? loadPersonalItemsOnce() : Promise.resolve();
+      // loadPersonalItemsOnce() 自体が例外を含めて全て内部でハンドリングするため、
+      // ここでは戻り値のPromiseを保持・awaitする必要はない（意図的にfire-and-forget）。
+      if (!personalItemsLoaded && !personalItemsUnavailable) {
+        loadPersonalItemsOnce();
+      }
       container.innerHTML = '';
       if (residentRows.length === 0) {
         container.innerHTML = `
