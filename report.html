@@ -1537,7 +1537,15 @@
           if (Object.keys(pendingConflicts.residents).length === 0) delete pendingConflicts.residents;
           banner.remove();
         });
-        entry.appendChild(banner);
+        // 2026-09-05: entry末尾にappendすると「個人の希望品」より下に出て、
+        // どの利用者の競合か視覚的に分からなくなる（Getter本体のスクショ目視で検出）。
+        // 該当利用者のtextareaの直後に差し込む。
+        const ta = entry.querySelector('textarea');
+        if (ta && ta.parentNode) {
+          ta.parentNode.insertBefore(banner, ta.nextSibling);
+        } else {
+          entry.appendChild(banner);
+        }
       });
     }
 
