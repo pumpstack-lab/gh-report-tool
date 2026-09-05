@@ -46,6 +46,10 @@ EXISTING_REPORT = {
     "residents": {
         "山田太郎": "既存の本文（山田さん）",
         "佐藤花子": "既存の本文（佐藤さん）",
+        # gh=6（マハロ）は短期入所枠を持つ。未編集分もlastSavedに含めておかないと、
+        # buildPatchが「lastSavedに無い新規キー」として空文字を差分に含めてしまう。
+        "__short_stay_1__name": "", "__short_stay_1__": "",
+        "__short_stay_2__name": "", "__short_stay_2__": "",
     },
     "shortage": [],
     "photos": [],
@@ -89,6 +93,24 @@ def setup_routes(page, *, reports_delay_ms=0, reports_fail=False, report_row=Non
         req = route.request
         url = req.url
         method = req.method
+
+        if "/rest/v1/rpc/report_save_partial" in url:
+            # 2026-09-05: 保存経路がupsertからreport_save_partial RPCへ移行した（Task3）。
+            # 空上書き防止の判定対象は「書き込みリクエストが飛んだか・bodyに何を積んだか」であり、
+            # エンドポイントがRPCに変わっても本ガードの検証意図（ロード未完了時に保存しない・
+            # 他利用者の内容を巻き込んで消さない）はpatch内容で同様に確認できる。
+            try:
+                payload = json.loads(req.post_data or "null")
+            except Exception:
+                payload = req.post_data
+            write_requests.append({"method": method, "url": url, "body": payload})
+            headers = {"content-type": "application/json"}
+            if writes_delay_ms:
+                headers["x-mock-delay-ms"] = str(writes_delay_ms)
+                headers["access-control-expose-headers"] = "x-mock-delay-ms"
+            resp = {"ok": True, "current": (payload or {}).get("p_patch", {})}
+            route.fulfill(status=200, headers=headers, body=json.dumps(resp))
+            return
 
         if "/rest/v1/reports" in url:
             if method == "GET":
@@ -265,20 +287,22 @@ def case2_normal_save_preserves_others(pw):
     ta.fill("山田さんの新しい本文")
     ta.dispatch_event("input")
 
-    page.wait_for_timeout(1200)  # 800ms自動保存 + マージン
+    page.wait_for_timeout(3400)  # 3秒デバウンス + マージン
     ok_one_write = len(writes) == 1
     record("upsertリクエストが1本飛ぶ", ok_one_write, f"実際: {len(writes)}本")
 
-    residents_in_body = {}
+    # 2026-09-05: 保存方式がRPC(report_save_partial)の項目単位patchに変わった。
+    # 空上書き防止の意図（他利用者を巻き込んで消さない）は「触っていないキーがpatchに
+    # 含まれないこと」で成立する（旧: bodyに全部入れて残す→新: そもそも送らないので消えようがない）。
+    patch_residents = {}
     if writes:
         body = writes[0]["body"]
-        row = body[0] if isinstance(body, list) else body
-        residents_in_body = row.get("residents", {})
-    preserved = residents_in_body.get("佐藤花子") == "既存の本文（佐藤さん）"
-    record("保存bodyに佐藤さんの既存本文が残っている（空上書きになっていない）", preserved, json.dumps(residents_in_body, ensure_ascii=False))
+        patch_residents = (body.get("p_patch") or {}).get("residents", {})
+    preserved = "佐藤花子" not in patch_residents
+    record("保存patchに佐藤さんが含まれない（触っていないので消えようがない）", preserved, json.dumps(patch_residents, ensure_ascii=False))
 
-    updated = residents_in_body.get("山田太郎") == "山田さんの新しい本文"
-    record("保存bodyに山田さんの新しい本文が入っている", updated, residents_in_body.get("山田太郎"))
+    updated = patch_residents.get("山田太郎") == "山田さんの新しい本文"
+    record("保存patchに山田さんの新しい本文だけが入っている", updated, patch_residents.get("山田太郎"))
 
     ind_text = page.locator("#draft-indicator").inner_text()
     record("「保存しました」が表示される", "保存しました" in ind_text, ind_text)
@@ -307,24 +331,23 @@ def case2b_keystroke_during_inflight_save_not_lost(pw):
     ta.fill("山田さんの本文A")
     ta.dispatch_event("input")
 
-    # 800ms後に自動保存が始まり、upsertレスポンスはさらに800ms遅延する。
+    # 3秒後に自動保存が始まり、upsertレスポンスはさらに800ms遅延する。
     # そのレスポンス待ち(in-flight)の間にもう1文字入力する。
-    page.wait_for_timeout(1000)  # 800ms自動保存タイマー経過→1本目のupsertがinflightのはず
+    page.wait_for_timeout(3200)  # 3秒デバウンス経過→1本目のupsertがinflightのはず
     ta.evaluate("el => { el.value += '追記'; el.dispatchEvent(new Event('input', {bubbles:true})); }")
 
-    # 1本目の応答(800ms delay)が返り、2本目の自動保存(800ms後)も完了するまで待つ
-    page.wait_for_timeout(2200)
+    # 1本目の応答(800ms delay)が返り、2本目の自動保存(3秒後)も完了するまで待つ
+    page.wait_for_timeout(4200)
 
     ok_two_writes = len(writes) == 2
     record("送信中の追加入力でupsertが合計2本飛ぶ", ok_two_writes, f"実際: {len(writes)}本")
 
-    last_body = {}
+    last_patch_residents = {}
     if len(writes) >= 2:
         body = writes[1]["body"]
-        row = body[0] if isinstance(body, list) else body
-        last_body = row.get("residents", {})
-    contains_latest = last_body.get("山田太郎") == "山田さんの本文A追記"
-    record("2本目のbodyに最後の文字（追記）が含まれる", contains_latest, last_body.get("山田太郎"))
+        last_patch_residents = (body.get("p_patch") or {}).get("residents", {})
+    contains_latest = last_patch_residents.get("山田太郎") == "山田さんの本文A追記"
+    record("2本目のpatchに最後の文字（追記）が含まれる", contains_latest, last_patch_residents.get("山田太郎"))
 
     browser.close()
     return ok_two_writes and contains_latest
@@ -427,20 +450,19 @@ def case5_restore_gap_no_partial_overwrite(pw):
     restored_val = ta.input_value()
     record("復元完了時にDOMがサーバー内容に一致している（復元中の入力は破棄される）", restored_val == "既存の本文（山田さん）", restored_val)
 
-    # 復元完了後にあらためて入力すると保存される。bodyに他利用者の既存本文が全部残っていること
+    # 復元完了後にあらためて入力すると保存される。patchに他利用者を巻き込んでいないこと
     ta.fill("復元完了後の新しい本文")
     ta.dispatch_event("input")
-    page.wait_for_timeout(1200)
+    page.wait_for_timeout(3400)  # 3秒デバウンス + マージン
     ok_one_write_after_restore = len(writes) == 1
     record("復元完了後の入力ではupsertが1本飛ぶ", ok_one_write_after_restore, f"実際: {len(writes)}本")
 
-    residents_in_body = {}
+    patch_residents = {}
     if writes:
         body = writes[0]["body"]
-        row = body[0] if isinstance(body, list) else body
-        residents_in_body = row.get("residents", {})
-    preserved = residents_in_body.get("佐藤花子") == "既存の本文（佐藤さん）"
-    record("復元完了後のupsert bodyに既存本文が全部残っている（佐藤さん分）", preserved, json.dumps(residents_in_body, ensure_ascii=False))
+        patch_residents = (body.get("p_patch") or {}).get("residents", {})
+    preserved = "佐藤花子" not in patch_residents
+    record("復元完了後のpatchに佐藤さんが含まれない（触っていないので消えようがない）", preserved, json.dumps(patch_residents, ensure_ascii=False))
 
     browser.close()
     return (

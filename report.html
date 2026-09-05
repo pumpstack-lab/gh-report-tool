@@ -8,6 +8,7 @@
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="diaper-logic.js?v=2"></script>
   <script src="scripts/report_guard.js?v=1"></script>
+  <script src="scripts/report_patch.js?v=1"></script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
@@ -1299,30 +1300,23 @@
     }
 
     // ─── Auto-save ────────────────────────────────────────
-    function scheduleAutoSave() {
-      reportDirty = true;
-      if (!ReportGuard.canSaveReport({ loadedFor: reportLoadedFor, dateISO: dateEl.value, dirty: reportDirty })) {
-        // ロード未完了/失敗の日付に入力があった。偽の「保存しました」を出さず、保存もしない。
-        setLoadGuardBanner('読み込み中です。表示が終わってから入力してください');
-        return;
-      }
-      clearTimeout(saveTimer);
-      saveTimer = setTimeout(saveCurrentData, 800);
-    }
+    // lastSaved: 最後に保存が成功した時点の値。差分計算とCASの基準にする（設計§3-3）。
+    // ロード完了直後にサーバー値でスナップショットする（loadDateData/initの末尾で更新）。
+    let lastSaved = { residents: {}, reporter: '', workers: [], photos: [], shortage: '[]' };
+    let pendingConflicts = {}; // applyServerStateの戻り値をそのまま保持
+    let activeElementKey = null; // 現在フォーカス中のtextarea/inputに対応するキー
+    let pendingDeferredReplacements = {};
 
-    async function saveCurrentData() {
-      return saveCurrentDataForDate(dateEl.value);
-    }
-
-    async function saveCurrentDataForDate(dateISO) {
-      const guardState = { loadedFor: reportLoadedFor, dateISO, dirty: reportDirty };
-      if (!ReportGuard.canSaveReport(guardState)) {
-        if (ReportGuard.shouldWarnUnsaved(guardState)) {
-          setLoadGuardBanner('読み込み中です。表示が終わってから入力してください');
-        }
-        return;
-      }
-      const reporter = currentReporterText();
+    function collectCurrentState() {
+      const residentsData = {};
+      document.querySelectorAll('.resident-entry').forEach(entry => {
+        residentsData[entry.dataset.name] = entry.querySelector('textarea').value;
+      });
+      document.querySelectorAll('.short-stay-entry').forEach(entry => {
+        const key = entry.dataset.shortStayKey;
+        residentsData[key + 'name'] = entry.querySelector('input').value.trim();
+        residentsData[key] = entry.querySelector('textarea').value;
+      });
       const workersData = workerRows
         .filter(r => r.staff_id)
         .map(r => {
@@ -1333,36 +1327,84 @@
       const shortageData = shortageItems
         .filter(item => item.text.trim())
         .map(item => ({ text: item.text.trim(), checked: item.checked || false }));
-      const residentsData = {};
-      let hasContent = shortageData.length > 0 || uploadedPhotos.length > 0 || workersData.length > 0;
-      document.querySelectorAll('.resident-entry').forEach(entry => {
-        const val = entry.querySelector('textarea').value;
-        residentsData[entry.dataset.name] = val;
-        if (val.trim()) hasContent = true;
-      });
-      // 短期入所枠（マハロのみ）
-      document.querySelectorAll('.short-stay-entry').forEach(entry => {
-        const key = entry.dataset.shortStayKey;
-        const nameVal = entry.querySelector('input').value.trim();
-        const textVal = entry.querySelector('textarea').value;
-        residentsData[key + 'name'] = nameVal;
-        residentsData[key] = textVal;
-        if (nameVal || textVal.trim()) hasContent = true;
-      });
+      return {
+        residents: residentsData,
+        reporter: currentReporterText(),
+        workers: workersData,
+        photos: uploadedPhotos.map(p => ({ url: p.url, path: p.path })),
+        shortage: JSON.stringify(shortageData),
+      };
+    }
 
-      // 送信直前（DOM値をスナップショットした直後）にdirtyを下ろす。
-      // 保存成功後に下ろすと、送信中（await中）に打った最後の1文字がdirty=trueのまま
-      // タイマーで次のsaveCurrentDataForDateが走った時にcanSaveがguardを通らず、
-      // 未保存のまま「保存しました」だけ出る事故になる（2026-09-04 Getter指摘）。
-      // 失敗時は下の各分岐でdirty=trueに戻し、次の自動保存タイマーで再送されるようにする。
-      reportDirty = false;
+    function snapshotLastSaved(source) {
+      const rawS = source ? source.shortage : '[]';
+      lastSaved = {
+        residents: JSON.parse(JSON.stringify((source && source.residents) || {})),
+        reporter: (source && source.reporter) || '',
+        workers: JSON.parse(JSON.stringify((source && source.workers) || [])),
+        photos: JSON.parse(JSON.stringify((source && source.photos) || [])),
+        shortage: typeof rawS === 'string' ? rawS : JSON.stringify(rawS || []),
+      };
+    }
 
-      // 既存レコードがある場合は担当者名の変更（空欄含む）も保存する
-      const { data: existing } = await db.from('reports').select('id')
-        .eq('gh_num', parseInt(ghNum)).eq('report_date', dateISO).maybeSingle();
+    function scheduleAutoSave() {
+      reportDirty = true;
+      if (!ReportGuard.canSaveReport({ loadedFor: reportLoadedFor, dateISO: dateEl.value, dirty: reportDirty })) {
+        // ロード未完了/失敗の日付に入力があった。偽の「保存しました」を出さず、保存もしない。
+        setLoadGuardBanner('読み込み中です。表示が終わってから入力してください');
+        return;
+      }
+      clearTimeout(saveTimer);
+      saveTimer = setTimeout(saveCurrentData, 3000);
+    }
 
-      // オムツ使用個数の保存（0のままの行はレコードを作らない。
-      // 既に保存済みの日を0に直した場合は該当行をdeleteする＝入力取り消し）
+    async function saveCurrentData() {
+      return saveCurrentDataForDate(dateEl.value);
+    }
+
+    function keepaliveRpcURL() {
+      return `${SUPABASE_URL}/rest/v1/rpc/report_save_partial`;
+    }
+
+    async function callSavePartial(dateISO, patch, base, opts) {
+      const useKeepalive = opts && opts.useKeepalive;
+      const body = {
+        p_gh_num: parseInt(ghNum),
+        p_report_date: dateISO,
+        p_gh_name: ghName,
+        p_patch: patch,
+        p_base: base,
+      };
+      if (useKeepalive) {
+        // 3-5: 離脱時はsupabase-jsを使わない（ページ破棄で打ち切られるため）。
+        // fetch(keepalive:true)でRESTのrpc URLを直接叩く。
+        const res = await fetch(keepaliveRpcURL(), {
+          method: 'POST',
+          keepalive: true,
+          headers: {
+            apikey: SUPABASE_ANON_KEY,
+            Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(body),
+        });
+        return { data: await res.json().catch(() => null), error: res.ok ? null : { message: `HTTP ${res.status}` } };
+      }
+      return db.rpc('report_save_partial', body);
+    }
+
+    async function saveCurrentDataForDate(dateISO, opts) {
+      const guardState = { loadedFor: reportLoadedFor, dateISO, dirty: reportDirty };
+      if (!ReportGuard.canSaveReport(guardState)) {
+        if (ReportGuard.shouldWarnUnsaved(guardState)) {
+          setLoadGuardBanner('読み込み中です。表示が終わってから入力してください');
+        }
+        return;
+      }
+      const current = collectCurrentState();
+      const { patch, base } = ReportPatch.buildPatch(lastSaved, current);
+
+      // オムツ使用個数の保存（既存の別テーブル・行まるごと事故と無関係のため据え置き）
       const diaperUpsertRows = [];
       const diaperDeleteItemIds = [];
       Object.entries(diaperUsageValues).forEach(([itemId, count]) => {
@@ -1381,34 +1423,27 @@
         if (diaperDelErr) { console.error('diaper_usage delete failed:', diaperDelErr.message); diaperSaveError = diaperSaveError || diaperDelErr; }
       }
 
-      if (!hasContent && !existing) {
-        // 日報本文が空でもオムツだけ入力された日は保存結果をインジケーターに出す
-        if (diaperUpsertRows.length > 0 || diaperDeleteItemIds.length > 0) {
-          const ind = document.getElementById('draft-indicator');
-          if (diaperSaveError) {
-            ind.style.color = '#e74c3c';
-            ind.textContent = '⚠️ 保存失敗: ' + diaperSaveError.message;
-            reportDirty = true; // 失敗分を次の自動保存で再送できるようにする
-          } else {
-            ind.style.color = '';
-            ind.textContent = '保存しました ✓';
-          }
-          setTimeout(() => ind.textContent = '', 3000);
+      if (Object.keys(patch).length === 0) {
+        // 差分が無い（オムツだけの入力など）。dirtyだけ下ろして終わる
+        reportDirty = false;
+        const ind = document.getElementById('draft-indicator');
+        if (diaperSaveError) {
+          ind.style.color = '#e74c3c';
+          ind.textContent = '⚠️ 保存失敗: ' + diaperSaveError.message;
+          reportDirty = true;
+        } else if (diaperUpsertRows.length > 0 || diaperDeleteItemIds.length > 0) {
+          ind.style.color = '';
+          ind.textContent = '保存しました ✓';
         }
+        setTimeout(() => ind.textContent = '', 3000);
         return;
       }
 
-      const { error } = await db.from('reports').upsert({
-        gh_num: parseInt(ghNum),
-        gh_name: ghName,
-        report_date: dateISO,
-        reporter: reporter,
-        workers: workersData,
-        residents: residentsData,
-        shortage: shortageData,
-        photos: uploadedPhotos.map(p => ({ url: p.url, path: p.path })),
-        updated_at: new Date().toISOString()
-      }, { onConflict: 'gh_num,report_date' });
+      // 送信直前（差分計算の直後）にdirtyを下ろす。送信中の追加入力は次のタイマーで再送される
+      // （2026-09-04 Getter指摘・report_guard.jsと同じ考え方）。
+      reportDirty = false;
+
+      const { data, error } = await callSavePartial(dateISO, patch, base, opts);
 
       const ind = document.getElementById('draft-indicator');
       const saveFailure = error || diaperSaveError;
@@ -1416,12 +1451,121 @@
         ind.style.color = '#e74c3c';
         ind.textContent = '⚠️ 保存失敗: ' + saveFailure.message;
         reportDirty = true; // 失敗分を次の自動保存で再送できるようにする
-      } else {
-        ind.style.color = '';
-        ind.textContent = '保存しました ✓';
-        document.getElementById('existing-badge').textContent = '記録あり ✓';
+        setTimeout(() => ind.textContent = '', 3000);
+        return;
       }
+
+      if (data && data.ok === false) {
+        // conflict: applyServerStateでcurrent/lastSaved/pendingConflictsを更新し、UIへ反映する
+        const result = ReportPatch.applyServerState({
+          current, lastSaved, server: data.current, conflicts: data.conflicts, activeKey: activeElementKey,
+        });
+        lastSaved = result.lastSaved;
+        pendingConflicts = result.pendingConflicts;
+        applyDeferredOrImmediate(result);
+        renderConflictBanners();
+        ind.style.color = '#e74c3c';
+        ind.textContent = '⚠️ 他の職員の入力と競合しました。下の選択欄から選んでください';
+        reportDirty = true; // conflictしていないキーは次の自動保存でも送られる
+        setTimeout(() => ind.textContent = '', 4000);
+        return;
+      }
+
+      // 成功: 送信したpatchの分だけlastSavedを更新する（サーバーからのcurrentをそのまま採用）
+      const result = ReportPatch.applyServerState({
+        current, lastSaved, server: (data && data.current) || current, conflicts: {}, activeKey: activeElementKey,
+      });
+      lastSaved = result.lastSaved;
+      applyDeferredOrImmediate(result);
+      ind.style.color = '';
+      ind.textContent = '保存しました ✓';
+      document.getElementById('existing-badge').textContent = '記録あり ✓';
       setTimeout(() => ind.textContent = '', 3000);
+    }
+
+    // applyServerStateが返したcurrent/deferredReplacementsをDOMへ反映する。
+    // dirtyでないキーはこの場でtextareaへ書き戻し、入力中のキーはpendingDeferredReplacementsへ積んで
+    // フォーカス離脱時（bindActiveKeyTrackingのblur）に反映する（設計§3-3bの4）。
+    function applyDeferredOrImmediate(result) {
+      const nextResidents = (result.current && result.current.residents) || {};
+      document.querySelectorAll('.resident-entry').forEach(entry => {
+        const name = entry.dataset.name;
+        const ta = entry.querySelector('textarea');
+        if (document.activeElement === ta) return; // 4: 入力中は書き換えない
+        if (Object.prototype.hasOwnProperty.call(nextResidents, name) && ta.value !== nextResidents[name]) {
+          ta.value = nextResidents[name];
+          autoExpand(ta);
+        }
+      });
+      const deferred = (result.deferredReplacements && result.deferredReplacements.residents) || {};
+      if (Object.keys(deferred).length > 0) {
+        pendingDeferredReplacements.residents = Object.assign(
+          pendingDeferredReplacements.residents || {}, deferred
+        );
+      }
+    }
+
+    // conflictバナーの描画（設計§3-3b の3: 「自分の内容を使う／相手の内容を使う」2択）
+    function renderConflictBanners() {
+      document.querySelectorAll('.resident-entry .conflict-banner').forEach(el => el.remove());
+      const residentConflicts = pendingConflicts.residents || {};
+      Object.entries(residentConflicts).forEach(([name, otherValue]) => {
+        const entry = Array.from(document.querySelectorAll('.resident-entry'))
+          .find(e => e.dataset.name === name);
+        if (!entry) return;
+        const banner = document.createElement('div');
+        banner.className = 'conflict-banner';
+        banner.style.cssText = 'margin-top:8px;padding:10px;border:1.5px solid #e74c3c;border-radius:8px;background:#fdecea;font-size:13px';
+        banner.innerHTML = `
+          <div style="font-weight:bold;color:#c0392b;margin-bottom:6px">⚠️ 他の職員が別の内容を保存しました</div>
+          <div style="white-space:pre-wrap;background:#fff;padding:6px;border-radius:4px;margin-bottom:8px">${escapeHtml(otherValue)}</div>
+          <button type="button" class="btn-conflict-keep-mine" style="margin-right:8px">自分の内容を使う</button>
+          <button type="button" class="btn-conflict-use-theirs">相手の内容を使う</button>
+        `;
+        banner.querySelector('.btn-conflict-keep-mine').addEventListener('click', () => {
+          delete pendingConflicts.residents[name];
+          if (Object.keys(pendingConflicts.residents).length === 0) delete pendingConflicts.residents;
+          banner.remove();
+          scheduleAutoSave(); // 自分の内容で改めて保存を試みる（新しいbaseで送るため次回は通る）
+        });
+        banner.querySelector('.btn-conflict-use-theirs').addEventListener('click', () => {
+          const ta = entry.querySelector('textarea');
+          ta.value = otherValue;
+          autoExpand(ta);
+          lastSaved.residents[name] = otherValue;
+          delete pendingConflicts.residents[name];
+          if (Object.keys(pendingConflicts.residents).length === 0) delete pendingConflicts.residents;
+          banner.remove();
+        });
+        entry.appendChild(banner);
+      });
+    }
+
+    // 3-5: visibilitychange(hidden)とpagehideで即フラッシュ。keepalive:trueで離脱後も送信を継続させる。
+    function flushOnLeave() {
+      if (!ReportGuard.canSaveReport({ loadedFor: reportLoadedFor, dateISO: dateEl.value, dirty: reportDirty })) return;
+      clearTimeout(saveTimer);
+      saveCurrentDataForDate(dateEl.value, { useKeepalive: true });
+    }
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) flushOnLeave();
+    });
+    window.addEventListener('pagehide', flushOnLeave);
+
+    // 3-3b の4: activeElementKeyの追跡（focus/blurで更新）。textarea値の書き換え遅延に使う。
+    function bindActiveKeyTracking(el, key) {
+      el.addEventListener('focus', () => { activeElementKey = key; });
+      el.addEventListener('blur', () => {
+        if (activeElementKey === key) activeElementKey = null;
+        // フォーカス離脱時に保留していた置換を適用する
+        const [topKey, subKey] = key.split('.');
+        const deferred = pendingDeferredReplacements;
+        if (deferred && deferred[topKey] && subKey && Object.prototype.hasOwnProperty.call(deferred[topKey], subKey)) {
+          el.value = deferred[topKey][subKey];
+          autoExpand(el);
+          delete deferred[topKey][subKey];
+        }
+      });
     }
 
     async function loadDateData(dateISO) {
@@ -1498,6 +1642,9 @@
       // （2026-09-04 code-review指摘・防ぎたい事故そのもの）。
       // 個人の希望品（personal_shortage_items）はGHごとに1回だけ init() で取得する蓄積型のため、
       // 日付切替のたびに走るこのロードとは完全に独立している（このガードの対象外）。
+      snapshotLastSaved(data);
+      pendingConflicts = {};
+      pendingDeferredReplacements = {};
       reportLoadedFor = dateISO;
       reportDirty = false; // ここでDOMはサーバー内容と一致済みなので、ロード中の入力(blocked)は破棄してよい
       setFormInputsDisabled(false);
@@ -1746,6 +1893,9 @@
         container.querySelectorAll('textarea').forEach(ta => {
           ta.addEventListener('input', function() { autoExpand(this); scheduleAutoSave(); });
         });
+        document.querySelectorAll('.resident-entry').forEach(entry => {
+          bindActiveKeyTracking(entry.querySelector('textarea'), `residents.${entry.dataset.name}`);
+        });
       }
 
       // マハロ（gh=6）の場合は短期入所枠を追加
@@ -1804,6 +1954,9 @@
         uploadedPhotos = [];
         renderPhotoPreview();
       }
+      snapshotLastSaved(reportData);
+      pendingConflicts = {};
+      pendingDeferredReplacements = {};
       reportLoadedFor = dateISO;
       setFormInputsDisabled(false);
       setLoadGuardBanner(null);
