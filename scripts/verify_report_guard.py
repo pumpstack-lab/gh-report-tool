@@ -46,10 +46,6 @@ EXISTING_REPORT = {
     "residents": {
         "山田太郎": "既存の本文（山田さん）",
         "佐藤花子": "既存の本文（佐藤さん）",
-        # gh=6（マハロ）は短期入所枠を持つ。未編集分もlastSavedに含めておかないと、
-        # buildPatchが「lastSavedに無い新規キー」として空文字を差分に含めてしまう。
-        "__short_stay_1__name": "", "__short_stay_1__": "",
-        "__short_stay_2__name": "", "__short_stay_2__": "",
     },
     "shortage": [],
     "photos": [],
@@ -402,7 +398,7 @@ def case4_date_switch_no_stale_save(pw):
     page.wait_for_selector(".resident-entry textarea", timeout=5000)
     ta = page.locator(".resident-entry textarea").first
     ta.evaluate("el => { el.disabled = false; el.value = '新日付での緊急入力'; el.dispatchEvent(new Event('input', {bubbles:true})); }")
-    page.wait_for_timeout(1000)  # 800ms自動保存タイマー分。まだ1500ms delay中のはず
+    page.wait_for_timeout(1000)  # 3秒デバウンスにまだ届いていない。まだ1500ms delay中のはず
     ok_no_write_during_new_load = len(writes) == 0
     record("新日付ロード完了前の入力でも保存が飛ばない", ok_no_write_during_new_load, f"実際: {len(writes)}本")
 
@@ -440,7 +436,7 @@ def case5_restore_gap_no_partial_overwrite(pw):
     ta = page.locator(".resident-entry textarea").first
     ta.evaluate("el => { el.disabled = false; el.value = '復元中の緊急入力'; el.dispatchEvent(new Event('input', {bubbles:true})); }")
 
-    page.wait_for_timeout(1200)  # 800ms自動保存タイマー分待つが、復元(1.5秒delay)はまだ終わっていないはず
+    page.wait_for_timeout(1200)  # 3秒デバウンスにまだ届いていない。復元(1.5秒delay)もまだ終わっていないはず
     ok_no_write_during_restore = len(writes) == 0
     record("フォーム復元中の入力では保存リクエストが飛ばない", ok_no_write_during_restore, f"実際: {len(writes)}本")
 

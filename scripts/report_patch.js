@@ -16,6 +16,21 @@
     return JSON.stringify(a) === JSON.stringify(b);
   }
 
+  // undefined/null/'' を「空」として同一視する。
+  // 新規日作成直後は全利用者が空文字で、lastSavedにキーが無い(undefined)まま他人が
+  // 別の利用者だけ更新すると、この「未編集の空欄」までpatchに載ってしまい、SQL側で
+  // CAS不一致(NULL vs '')と誤判定され保存全体がconflictになる事故を防ぐ（2026-09-05実測発覚）。
+  // 「値があったものを空にした」（旧値が非空・新値が空）は消したことを伝える必要があるため
+  // 従来通り差分に含める＝ isBlank(a) と isBlank(b) が両方trueの場合だけ「差分なし」とみなす。
+  function isBlank(v) {
+    return v === undefined || v === null || v === '';
+  }
+
+  function residentValueEqual(a, b) {
+    if (isBlank(a) && isBlank(b)) return true;
+    return deepEqual(a, b);
+  }
+
   /**
    * lastSaved（最後に保存が成功した時点の値）と current（今の画面の値）を比較し、
    * 変更があったキーだけを patch に、そのキーの旧値だけを base に入れる。
@@ -38,7 +53,7 @@
     residentNames.forEach((name) => {
       const oldVal = lastResidents[name];
       const newVal = curResidents[name];
-      if (!deepEqual(oldVal, newVal)) {
+      if (!residentValueEqual(oldVal, newVal)) {
         if (!residentsPatch) { residentsPatch = {}; residentsBase = {}; }
         residentsPatch[name] = newVal;
         residentsBase[name] = oldVal;

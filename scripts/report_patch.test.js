@@ -51,6 +51,25 @@ test('buildPatch: 新規利用者キー（lastSavedに存在しない）も差�
   assert.deepEqual(base, { residents: { '新規太郎': undefined } });
 });
 
+test('buildPatch: 旧=キー無し・新=空文字は「両方とも空」として差分に入らない（触っていない空欄の誤conflict防止）', () => {
+  // 2026-09-05実測発覚: 新規日作成直後は全員が空文字。lastSavedに無い(undefined)まま
+  // 他人が別利用者だけ書いて保存すると、この「未編集の空欄」までpatchに載り、
+  // SQL側でCAS不一致(NULL vs '')と誤判定されて保存全体がconflictになるバグの再発防止。
+  const lastSaved = { residents: {}, reporter: '', workers: [], photos: [], shortage: '[]' };
+  const current = { residents: { '山田太郎': '', '佐藤花子': 'Bが書いた本文' }, reporter: '', workers: [], photos: [], shortage: '[]' };
+  const { patch, base } = buildPatch(lastSaved, current);
+  assert.deepEqual(patch, { residents: { '佐藤花子': 'Bが書いた本文' } });
+  assert.deepEqual(base, { residents: { '佐藤花子': undefined } });
+});
+
+test('buildPatch: 旧=本文あり・新=空文字は今まで通り差分に入る（消したことを伝える必要がある）', () => {
+  const lastSaved = { residents: { '山田太郎': '元気でした' }, reporter: '', workers: [], photos: [], shortage: '[]' };
+  const current = { residents: { '山田太郎': '' }, reporter: '', workers: [], photos: [], shortage: '[]' };
+  const { patch, base } = buildPatch(lastSaved, current);
+  assert.deepEqual(patch, { residents: { '山田太郎': '' } });
+  assert.deepEqual(base, { residents: { '山田太郎': '元気でした' } });
+});
+
 // ─── applyServerState ─────────────────────────────────────
 test('applyServerState: dirtyでないキー（current==lastSaved）はサーバー値で置き換え、lastSavedも更新', () => {
   const state = {

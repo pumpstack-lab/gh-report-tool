@@ -287,8 +287,17 @@ def case4_duplicate_item_name_blocked(pw):
     input_preserved = input_el.input_value() == "歯ブラシ"
     record("重複エラー時は入力値が残る", input_preserved, input_el.input_value())
 
+    # コーディネーター指摘3: 重複エラー表示後、テキストを変えて追加に成功した場合、
+    # 赤いエラー表示が残ったままにならないこと。
+    input_el.fill("検証用タオル")
+    add_btn.click()
+    page.wait_for_timeout(400)
+    err_hidden_after_success = not err.is_visible()
+    record("重複エラー後、別テキストで成功追加するとエラー表示が消える", err_hidden_after_success)
+
     browser.close()
-    return ok_no_insert and err_visible and "すでに登録されています" in err_text and input_preserved
+    return (ok_no_insert and err_visible and "すでに登録されています" in err_text and input_preserved
+            and err_hidden_after_success)
 
 
 def screenshot_widths(pw):

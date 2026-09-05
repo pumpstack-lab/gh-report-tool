@@ -110,12 +110,19 @@ begin
 
   -- 3-2: residents はキー単位CAS。COALESCEで防御（事実7: workers/photosがNULLの行が386件ある）
   -- v_created（この呼び出しで新規作成した行）は他者と競合しようがないのでCASを丸ごとスキップする。
+  -- 2026-09-05実測発覚（最重要ブロッカー）: 「キー無し(NULL)」と「空文字('')」を素で比較すると、
+  -- 新規日作成直後（全員空文字）に他者が別利用者だけ更新した際、触ってもいない空欄の利用者が
+  -- NULL vs '' の不一致でconflict誤判定され、書いた本文ごと保存全体が却下される。
+  -- 両辺を「空はNULLに正規化してから比較」することで、undefined/null/''を同一視する
+  -- （JS側 report_patch.js の isBlank と対称。値があったものを空にした場合＝旧値が非空・
+  --   新値が空、は正規化後も非NULL vs NULLで不一致のまま残るため、従来通りconflict判定される）。
   v_new_residents := coalesce(v_row.residents, '{}'::jsonb);
   if p_patch ? 'residents' then
     select array_agg(k) into v_resident_keys from jsonb_object_keys(p_patch->'residents') as k;
     foreach v_rname in array coalesce(v_resident_keys, '{}') loop
-      if (not v_created) and (coalesce(v_row.residents, '{}'::jsonb) -> v_rname) is distinct from
-         (coalesce(p_base->'residents', '{}'::jsonb) -> v_rname) then
+      if (not v_created) and
+         nullif(coalesce(v_row.residents, '{}'::jsonb) ->> v_rname, '') is distinct from
+         nullif(coalesce(p_base->'residents', '{}'::jsonb) ->> v_rname, '') then
         v_conflict_residents := array_append(v_conflict_residents, v_rname);
         v_has_conflict := true;
       else
@@ -222,7 +229,11 @@ begin
 end $$;
 
 grant execute on function report_save_partial(int, date, text, jsonb, jsonb) to anon;
-grant execute on function report_history_prune() to anon;
+-- report_history_prune() は report_save_partial 内部からのみ perform される（SECURITY DEFINERの
+-- 呼び出し元が実行権限を持てば十分）。フロントから直接呼ぶ経路が無いためanonへの付与は最小権限
+-- 原則に反する（security-review指摘・2026-09-05）。本番未適用のためgrantせず明示的にrevokeしておく
+-- （このファイルを繰り返し流しても安全なよう、存在しない権限へのrevokeがエラーにならないことを利用）。
+revoke execute on function report_history_prune() from anon, public;
 
 -- ─── ローカル検証手順（本番には触れない・Task 5でGetter本体が実施） ───
 -- 1. テスト行を1件作る

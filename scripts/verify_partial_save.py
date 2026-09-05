@@ -35,14 +35,7 @@ EXISTING_REPORT = {
     "report_date": DATE,
     "reporter": "",
     "workers": [],
-    "residents": {
-        "山田太郎": "既存の本文（山田さん）", "佐藤花子": "既存の本文（佐藤さん）",
-        # gh=6（マハロ）は短期入所枠を持つため、未編集分もlastSavedに含めておく
-        # （含めないとbuildPatchが「lastSavedに無い新規キー」として空文字を差分に入れてしまい、
-        #  ケース①のpatchアサーションが短期入所キーで汚染される）
-        "__short_stay_1__name": "", "__short_stay_1__": "",
-        "__short_stay_2__name": "", "__short_stay_2__": "",
-    },
+    "residents": {"山田太郎": "既存の本文（山田さん）", "佐藤花子": "既存の本文（佐藤さん）"},
     "shortage": "[]",
     "photos": [],
     "updated_at": "2026-09-05T00:00:00.000000+00:00",
@@ -157,9 +150,10 @@ def case2_conflict_shows_banner_and_keeps_input(pw):
     print("\n--- ケース②: 同じ利用者を古いタブで編集→conflictで保存されず赤帯・入力は画面に残る ---")
     browser = pw.chromium.launch()
     page = new_page(browser)
-    setup_routes(page, report_row=EXISTING_REPORT, rpc_responses=[
+    calls = setup_routes(page, report_row=EXISTING_REPORT, rpc_responses=[
         {"ok": False, "conflicts": {"residents": ["山田太郎"]},
-         "current": {"residents": {"山田太郎": "他端末が書いた本文", "佐藤花子": "既存の本文（佐藤さん）"}}}
+         "current": {"residents": {"山田太郎": "他端末が書いた本文", "佐藤花子": "既存の本文（佐藤さん）"}}},
+        {"ok": True, "current": {"residents": {"山田太郎": "自分が書いた新本文", "佐藤花子": "既存の本文（佐藤さん）"}}},
     ])
     page.goto(f"{BASE}/report.html?gh={GH}&date={DATE}", wait_until="domcontentloaded")
     page.wait_for_selector(".resident-entry textarea", timeout=5000)
@@ -178,8 +172,27 @@ def case2_conflict_shows_banner_and_keeps_input(pw):
     other_text = page.locator(".resident-entry .conflict-banner").first.inner_text()
     record("相手の内容が表示される", "他端末が書いた本文" in other_text, other_text)
 
+    # コーディネーター指摘1（ブロッカー）: 「自分の内容を使う」を押した後、
+    # 次の保存RPCのbaseがサーバー現在値に更新されていて（＝lastSavedを更新している）、
+    # ok=trueで通ること（更新していないと同じbaseを送り続け永久にconflictするバグの再現テスト）。
+    page.locator(".btn-conflict-keep-mine").first.click()
+    page.wait_for_timeout(3500)  # 「自分の内容を使う」はscheduleAutoSave→3秒デバウンス
+    ok_second_call_sent = len(calls) == 2
+    record("『自分の内容を使う』後、次の保存RPCが飛ぶ", ok_second_call_sent, f"実際: {len(calls)}本")
+
+    second_base_residents = {}
+    if len(calls) >= 2:
+        second_base_residents = (calls[1]["body"].get("p_base") or {}).get("residents", {})
+    ok_base_updated = second_base_residents.get("山田太郎") == "他端末が書いた本文"
+    record("2回目のbaseがサーバー現在値(他端末が書いた本文)になっている（無限conflict修正）",
+           ok_base_updated, json.dumps(second_base_residents, ensure_ascii=False))
+
+    banner_gone = page.locator(".resident-entry .conflict-banner").count() == 0
+    record("『自分の内容を使う』後、バナーが消える", banner_gone)
+
     browser.close()
-    return conflict_banner_visible and kept_value == "自分が書いた新本文" and "他端末が書いた本文" in other_text
+    return (conflict_banner_visible and kept_value == "自分が書いた新本文" and "他端末が書いた本文" in other_text
+            and ok_second_call_sent and ok_base_updated and banner_gone)
 
 
 def case3_debounce_3s(pw):
@@ -252,6 +265,46 @@ def case5_new_date_creation(pw):
     return ok_sent
 
 
+def case6_blank_resident_does_not_block_others_save(pw):
+    print("\n--- ケース⑥: 新規作成で空欄のまま残った利用者が、他人の本文まで巻き込んでconflict却下しない（最重要ブロッカー） ---")
+    # 実測再現（コーディネーター報告）:
+    # A: 新規日を作成（全員空文字で作られる） patch={"residents":{"山田太郎":"","佐藤花子":""}}
+    # B: Aより前から画面を開いていた（lastSaved={}）。山田だけ書いて保存
+    #    patch={"residents":{"山田太郎":"Bが書いた本文","佐藤花子":""}} base={"residents":{}}
+    #    修正前は conflicts.residents=["佐藤花子","山田太郎"] で ok=false になり、
+    #    Bの本文が1文字も入らなかった。修正後は佐藤花子はそもそもpatchに乗らないため通る。
+    browser = pw.chromium.launch()
+    page = new_page(browser)
+    calls = setup_routes(page, report_row=EXISTING_REPORT, rpc_responses=[
+        {"ok": True, "current": {"residents": {"山田太郎": "Bが書いた本文", "佐藤花子": "既存の本文（佐藤さん）"}}},
+    ])
+    page.goto(f"{BASE}/report.html?gh={GH}&date={DATE}", wait_until="domcontentloaded")
+    page.wait_for_selector(".resident-entry textarea", timeout=5000)
+
+    # 山田太郎だけ書く。佐藤花子は既存本文のまま触らない（=lastSavedと一致・patchに乗らないのが正しい）。
+    ta = page.locator(".resident-entry textarea").first
+    ta.fill("Bが書いた本文")
+    ta.dispatch_event("input")
+    page.wait_for_timeout(3500)
+
+    ok_sent = len(calls) == 1
+    record("保存RPCが1本飛ぶ", ok_sent, f"実際: {len(calls)}本")
+
+    patch_residents = {}
+    if calls:
+        patch_residents = (calls[0]["body"].get("p_patch") or {}).get("residents", {})
+    ok_only_yamada = patch_residents == {"山田太郎": "Bが書いた本文"}
+    record("patchには山田太郎だけが入る（佐藤花子は含まれずconflictにならない）",
+           ok_only_yamada, json.dumps(patch_residents, ensure_ascii=False))
+
+    saved_text = page.locator("#draft-indicator").inner_text()
+    ok_no_conflict_shown = "競合" not in saved_text and "保存しました" in saved_text
+    record("conflictにならず『保存しました』が出る", ok_no_conflict_shown, saved_text)
+
+    browser.close()
+    return ok_sent and ok_only_yamada and ok_no_conflict_shown
+
+
 def screenshot_widths(pw):
     print("\n--- スクリーンショット（3幅） ---")
     browser = pw.chromium.launch()
@@ -283,6 +336,7 @@ def main():
             r3 = case3_debounce_3s(pw)
             r4 = case4_hidden_flushes_immediately(pw)
             r5 = case5_new_date_creation(pw)
+            r6 = case6_blank_resident_does_not_block_others_save(pw)
             screenshot_widths(pw)
     finally:
         server.terminate()
@@ -295,7 +349,7 @@ def main():
         print(f"[{mark}] {name}")
         if not ok:
             all_ok = False
-    print(f"\n①: {'PASS' if r1 else 'FAIL'} / ②: {'PASS' if r2 else 'FAIL'} / ③: {'PASS' if r3 else 'FAIL'} / ④: {'PASS' if r4 else 'FAIL'} / ⑤: {'PASS' if r5 else 'FAIL'}")
+    print(f"\n①: {'PASS' if r1 else 'FAIL'} / ②: {'PASS' if r2 else 'FAIL'} / ③: {'PASS' if r3 else 'FAIL'} / ④: {'PASS' if r4 else 'FAIL'} / ⑤: {'PASS' if r5 else 'FAIL'} / ⑥: {'PASS' if r6 else 'FAIL'}")
     sys.exit(0 if all_ok else 1)
 
 

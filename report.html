@@ -537,6 +537,7 @@
   </div>
 
   <div class="load-guard-banner" id="load-guard-banner"></div>
+  <div class="load-guard-banner" id="top-conflict-banner"></div>
 
   <div class="section date-card-section" id="date-card-section">
     <div class="date-card-inner">
@@ -1366,6 +1367,41 @@
       return `${SUPABASE_URL}/rest/v1/rpc/report_save_partial`;
     }
 
+    function keepaliveHeaders(extra) {
+      return Object.assign({
+        apikey: SUPABASE_ANON_KEY,
+        Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+        'Content-Type': 'application/json',
+      }, extra || {});
+    }
+
+    // 離脱時（visibilitychange/pagehide）はsupabase-jsを使わない（ページ破棄で打ち切られるため）。
+    // fire-and-forget（awaitしない）でよい。UIフィードバックは離脱中なので出しようがなく、
+    // 失敗しても次回起動時の自動保存で再送されるため待つ必要がない。
+    function flushDiaperUsageKeepalive(dateISO) {
+      const upsertRows = [];
+      const deleteItemIds = [];
+      Object.entries(diaperUsageValues).forEach(([itemId, count]) => {
+        if (count > 0) upsertRows.push({ item_id: itemId, usage_date: dateISO, count });
+        else deleteItemIds.push(itemId);
+      });
+      if (upsertRows.length > 0) {
+        fetch(`${SUPABASE_URL}/rest/v1/diaper_usage?on_conflict=item_id,usage_date`, {
+          method: 'POST',
+          keepalive: true,
+          headers: keepaliveHeaders({ Prefer: 'resolution=merge-duplicates' }),
+          body: JSON.stringify(upsertRows),
+        }).catch(() => {});
+      }
+      deleteItemIds.forEach(itemId => {
+        fetch(`${SUPABASE_URL}/rest/v1/diaper_usage?usage_date=eq.${encodeURIComponent(dateISO)}&item_id=eq.${encodeURIComponent(itemId)}`, {
+          method: 'DELETE',
+          keepalive: true,
+          headers: keepaliveHeaders(),
+        }).catch(() => {});
+      });
+    }
+
     async function callSavePartial(dateISO, patch, base, opts) {
       const useKeepalive = opts && opts.useKeepalive;
       const body = {
@@ -1381,17 +1417,15 @@
         const res = await fetch(keepaliveRpcURL(), {
           method: 'POST',
           keepalive: true,
-          headers: {
-            apikey: SUPABASE_ANON_KEY,
-            Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
-            'Content-Type': 'application/json',
-          },
+          headers: keepaliveHeaders(),
           body: JSON.stringify(body),
         });
         return { data: await res.json().catch(() => null), error: res.ok ? null : { message: `HTTP ${res.status}` } };
       }
       return db.rpc('report_save_partial', body);
     }
+
+    let saveInFlight = false; // コーディネーター指摘: 送信中に再送が重なると自己競合するため同時に1本だけにする
 
     async function saveCurrentDataForDate(dateISO, opts) {
       const guardState = { loadedFor: reportLoadedFor, dateISO, dirty: reportDirty };
@@ -1401,8 +1435,51 @@
         }
         return;
       }
+      // コーディネーター指摘: 送信中に自動保存タイマーやflushOnLeaveが重なると自己競合する
+      // （2本のRPCが同時にin-flightになりbase/lastSavedの前提が崩れる）ため、同時に1本だけにする。
+      // 既にin-flight中なら諦めず、dirtyのままにして次の機会（次のタイマー発火・次のflush）に
+      // 委ねる（呼び出し元は既にreportDirty=trueを立てた後にここへ来る想定）。
+      if (saveInFlight) {
+        reportDirty = true;
+        return;
+      }
+      saveInFlight = true;
+      try {
+        return await doSaveCurrentDataForDate(dateISO, opts);
+      } finally {
+        saveInFlight = false;
+      }
+    }
+
+    async function doSaveCurrentDataForDate(dateISO, opts) {
+      const useKeepalive = opts && opts.useKeepalive;
       const current = collectCurrentState();
       const { patch, base } = ReportPatch.buildPatch(lastSaved, current);
+
+      if (useKeepalive) {
+        // コーディネーター指摘（順序）: 離脱時はRPC（日報本文）を最優先で送る。
+        // 非keepaliveのオムツupsertをawaitしてからRPCを送ると、ページ破棄までに
+        // RPCが間に合わず本文が失われる恐れがある。オムツはkeepalive fetchで
+        // fire-and-forgeし、RPCの送信・完了を優先する。
+        flushDiaperUsageKeepalive(dateISO);
+        if (Object.keys(patch).length === 0) { reportDirty = false; return; }
+        reportDirty = false;
+        const { data, error } = await callSavePartial(dateISO, patch, base, opts);
+        if (error) { reportDirty = true; return; }
+        if (data && data.ok === false) {
+          const result = ReportPatch.applyServerState({
+            current, lastSaved, server: data.current, conflicts: data.conflicts, activeKey: activeElementKey,
+          });
+          lastSaved = result.lastSaved;
+          reportDirty = true;
+          return;
+        }
+        const result = ReportPatch.applyServerState({
+          current, lastSaved, server: (data && data.current) || current, conflicts: {}, activeKey: activeElementKey,
+        });
+        lastSaved = result.lastSaved;
+        return;
+      }
 
       // オムツ使用個数の保存（既存の別テーブル・行まるごと事故と無関係のため据え置き）
       const diaperUpsertRows = [];
@@ -1427,15 +1504,20 @@
         // 差分が無い（オムツだけの入力など）。dirtyだけ下ろして終わる
         reportDirty = false;
         const ind = document.getElementById('draft-indicator');
+        // コーディネーター指摘4: このブロックは常にsetTimeoutで表示を消していたため、
+        // 何も表示していない（オムツの増減も無い）呼び出しでも3秒後に、進行中の別保存が
+        // 出した「保存しました ✓」やエラー表示を消してしまっていた。
+        // 自分がテキストを設定したときだけタイマーを仕掛ける。
         if (diaperSaveError) {
           ind.style.color = '#e74c3c';
           ind.textContent = '⚠️ 保存失敗: ' + diaperSaveError.message;
           reportDirty = true;
+          setTimeout(() => ind.textContent = '', 3000);
         } else if (diaperUpsertRows.length > 0 || diaperDeleteItemIds.length > 0) {
           ind.style.color = '';
           ind.textContent = '保存しました ✓';
+          setTimeout(() => ind.textContent = '', 3000);
         }
-        setTimeout(() => ind.textContent = '', 3000);
         return;
       }
 
@@ -1461,11 +1543,32 @@
           current, lastSaved, server: data.current, conflicts: data.conflicts, activeKey: activeElementKey,
         });
         lastSaved = result.lastSaved;
-        pendingConflicts = result.pendingConflicts;
         applyDeferredOrImmediate(result);
+
+        // residents以外（reporter/workers/photos/shortage）のconflictは選択UIを作らない（YAGNI）。
+        // その項目だけサーバー値を自動採用してlastSavedを更新する「自動復帰」にする
+        // （コーディネーター指摘: 画面に何も出ないまま永久に却下され続けるブロッカーの修正）。
+        const nonResidentConflictKeys = Object.keys(result.pendingConflicts).filter(k => k !== 'residents');
+        if (nonResidentConflictKeys.length > 0) {
+          nonResidentConflictKeys.forEach(key => {
+            const serverVal = result.pendingConflicts[key];
+            lastSaved[key] = serverVal;
+            applyTopLevelValueToForm(key, serverVal);
+          });
+          setTopLevelConflictBanner('担当者／不足品など一部の項目が他の職員に更新されました。最新を読み込みました');
+        } else {
+          setTopLevelConflictBanner(null);
+        }
+
+        pendingConflicts = { residents: result.pendingConflicts.residents };
+        if (!pendingConflicts.residents || Object.keys(pendingConflicts.residents).length === 0) {
+          delete pendingConflicts.residents;
+        }
         renderConflictBanners();
         ind.style.color = '#e74c3c';
-        ind.textContent = '⚠️ 他の職員の入力と競合しました。下の選択欄から選んでください';
+        ind.textContent = pendingConflicts.residents
+          ? '⚠️ 他の職員の入力と競合しました。下の選択欄から選んでください'
+          : '⚠️ 一部の項目が更新されました';
         reportDirty = true; // conflictしていないキーは次の自動保存でも送られる
         setTimeout(() => ind.textContent = '', 4000);
         return;
@@ -1505,6 +1608,40 @@
       }
     }
 
+    // residents以外のキーがconflictした場合の自動復帰（選択UIは作らない・YAGNI）。
+    // サーバー値をそのままフォームへ反映する。
+    function applyTopLevelValueToForm(key, serverVal) {
+      if (key === 'workers') {
+        restoreWorkers({ workers: serverVal, reporter: lastSaved.reporter });
+      } else if (key === 'reporter') {
+        // レガシー担当者欄（workersが空の日報のみ使われる）。restoreWorkersで再描画する。
+        restoreWorkers({ workers: lastSaved.workers, reporter: serverVal });
+      } else if (key === 'shortage') {
+        const rawS = serverVal;
+        const arr = typeof rawS === 'string' ? JSON.parse(rawS || '[]') : (rawS || []);
+        shortageItems = arr.map(item =>
+          typeof item === 'string' ? { text: item, checked: false } : { text: item.text || '', checked: !!item.checked }
+        );
+        renderShortageList();
+      } else if (key === 'photos') {
+        uploadedPhotos = (serverVal || []).map(p => ({ url: p.url, path: p.path }));
+        renderPhotoPreview();
+      }
+    }
+
+    function setTopLevelConflictBanner(message) {
+      const el = document.getElementById('top-conflict-banner');
+      if (!el) return;
+      if (message) {
+        el.textContent = message;
+        el.classList.add('is-visible');
+        clearTimeout(setTopLevelConflictBanner._timer);
+        setTopLevelConflictBanner._timer = setTimeout(() => el.classList.remove('is-visible'), 5000);
+      } else {
+        el.classList.remove('is-visible');
+      }
+    }
+
     // conflictバナーの描画（設計§3-3b の3: 「自分の内容を使う／相手の内容を使う」2択）
     function renderConflictBanners() {
       document.querySelectorAll('.resident-entry .conflict-banner').forEach(el => el.remove());
@@ -1513,16 +1650,26 @@
         const entry = Array.from(document.querySelectorAll('.resident-entry'))
           .find(e => e.dataset.name === name);
         if (!entry) return;
+        // コーディネーター指摘2: サーバー側で該当キーが消えている場合 otherValue が undefined になり、
+        // 文字列"undefined"がそのまま表示されるバグの修正。
+        const hasOtherValue = otherValue !== undefined && otherValue !== null;
+        const otherDisplay = hasOtherValue ? escapeHtml(otherValue) : '（相手の入力は空です）';
+        const otherValueForAdopt = hasOtherValue ? otherValue : '';
         const banner = document.createElement('div');
         banner.className = 'conflict-banner';
         banner.style.cssText = 'margin-top:8px;padding:10px;border:1.5px solid #e74c3c;border-radius:8px;background:#fdecea;font-size:13px';
         banner.innerHTML = `
           <div style="font-weight:bold;color:#c0392b;margin-bottom:6px">⚠️ 他の職員が別の内容を保存しました</div>
-          <div style="white-space:pre-wrap;background:#fff;padding:6px;border-radius:4px;margin-bottom:8px">${escapeHtml(otherValue)}</div>
+          <div style="white-space:pre-wrap;background:#fff;padding:6px;border-radius:4px;margin-bottom:8px">${otherDisplay}</div>
           <button type="button" class="btn-conflict-keep-mine" style="margin-right:8px">自分の内容を使う</button>
           <button type="button" class="btn-conflict-use-theirs">相手の内容を使う</button>
         `;
         banner.querySelector('.btn-conflict-keep-mine').addEventListener('click', () => {
+          // コーディネーター指摘1（ブロッカー）: lastSavedを更新しないまま次の保存をスケジュールすると、
+          // buildPatchが同じ古いbaseを送り続け、RPCが永久にconflictを返す無限ループになる。
+          // 「相手の内容を見た上で自分の内容で上書きする」の意味になるよう、
+          // 一旦サーバーの現在値でbaseを追いつかせてから改めて保存する。
+          lastSaved.residents[name] = otherValueForAdopt;
           delete pendingConflicts.residents[name];
           if (Object.keys(pendingConflicts.residents).length === 0) delete pendingConflicts.residents;
           banner.remove();
@@ -1530,9 +1677,9 @@
         });
         banner.querySelector('.btn-conflict-use-theirs').addEventListener('click', () => {
           const ta = entry.querySelector('textarea');
-          ta.value = otherValue;
+          ta.value = otherValueForAdopt;
           autoExpand(ta);
-          lastSaved.residents[name] = otherValue;
+          lastSaved.residents[name] = otherValueForAdopt;
           delete pendingConflicts.residents[name];
           if (Object.keys(pendingConflicts.residents).length === 0) delete pendingConflicts.residents;
           banner.remove();
@@ -1580,6 +1727,11 @@
       reportLoadedFor = null;
       reportDirty = false;
       setLoadGuardBanner(null);
+      // コーディネーター指摘: 日付を切り替えると前の日付の競合バナーDOMが残ったままになる。
+      document.querySelectorAll('.resident-entry .conflict-banner').forEach(el => el.remove());
+      pendingConflicts = {};
+      pendingDeferredReplacements = {};
+      setTopLevelConflictBanner(null);
       setFormInputsDisabled(true);
       const { data, error } = await db.from('reports').select('*')
         .eq('gh_num', parseInt(ghNum))
