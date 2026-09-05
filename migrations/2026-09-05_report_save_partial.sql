@@ -74,6 +74,7 @@ declare
   v_new_shortage text;
   v_has_conflict boolean := false;
   v_maintenance_date date;
+  v_created boolean := false;
 begin
   -- 3-1: p_patch が object 以外なら例外。'{...}'::jsonb || 'null'::jsonb は
   -- エラーにならず配列化することを実測確認済みのため、ここで必ず弾く。
@@ -100,14 +101,20 @@ begin
       -- 挿入も再取得も失敗する状況は理論上ない想定だが、例外で500にせずconflict扱いに倒す
       return jsonb_build_object('ok', false, 'conflicts', jsonb_build_object('_row', true), 'current', '{}'::jsonb);
     end if;
+
+    -- この呼び出しが行を新規作成した場合、他者と競合しようがないので
+    -- CASを丸ごとスキップして全項目を適用する（列デフォルト値とbase未指定(NULL)の
+    -- 不一致で必ずconflict化するバグの根治・2026-09-05実測発覚）。
+    v_created := true;
   end if;
 
   -- 3-2: residents はキー単位CAS。COALESCEで防御（事実7: workers/photosがNULLの行が386件ある）
+  -- v_created（この呼び出しで新規作成した行）は他者と競合しようがないのでCASを丸ごとスキップする。
   v_new_residents := coalesce(v_row.residents, '{}'::jsonb);
   if p_patch ? 'residents' then
     select array_agg(k) into v_resident_keys from jsonb_object_keys(p_patch->'residents') as k;
     foreach v_rname in array coalesce(v_resident_keys, '{}') loop
-      if (coalesce(v_row.residents, '{}'::jsonb) -> v_rname) is distinct from
+      if (not v_created) and (coalesce(v_row.residents, '{}'::jsonb) -> v_rname) is distinct from
          (coalesce(p_base->'residents', '{}'::jsonb) -> v_rname) then
         v_conflict_residents := array_append(v_conflict_residents, v_rname);
         v_has_conflict := true;
@@ -117,10 +124,11 @@ begin
     end loop;
   end if;
 
-  -- reporter: text単位CAS
+  -- reporter: text単位CAS。列デフォルト(''）とbase未指定(NULL)の不一致を吸収するため
+  -- 両辺を coalesce(x,'') してから比較する（2026-09-05修正・新規作成が必ずconflictになるバグの根治）。
   v_new_reporter := v_row.reporter;
   if p_patch ? 'reporter' then
-    if v_row.reporter is distinct from (p_base->>'reporter') then
+    if (not v_created) and coalesce(v_row.reporter, '') is distinct from coalesce(p_base->>'reporter', '') then
       v_conflicts := v_conflicts || jsonb_build_object('reporter', true);
       v_has_conflict := true;
     else
@@ -131,7 +139,7 @@ begin
   -- workers: jsonb全体単位CAS（COALESCEで防御）
   v_new_workers := coalesce(v_row.workers, '[]'::jsonb);
   if p_patch ? 'workers' then
-    if coalesce(v_row.workers, '[]'::jsonb) is distinct from coalesce(p_base->'workers', '[]'::jsonb) then
+    if (not v_created) and coalesce(v_row.workers, '[]'::jsonb) is distinct from coalesce(p_base->'workers', '[]'::jsonb) then
       v_conflicts := v_conflicts || jsonb_build_object('workers', true);
       v_has_conflict := true;
     else
@@ -142,7 +150,7 @@ begin
   -- photos: jsonb全体単位CAS（COALESCEで防御）
   v_new_photos := coalesce(v_row.photos, '[]'::jsonb);
   if p_patch ? 'photos' then
-    if coalesce(v_row.photos, '[]'::jsonb) is distinct from coalesce(p_base->'photos', '[]'::jsonb) then
+    if (not v_created) and coalesce(v_row.photos, '[]'::jsonb) is distinct from coalesce(p_base->'photos', '[]'::jsonb) then
       v_conflicts := v_conflicts || jsonb_build_object('photos', true);
       v_has_conflict := true;
     else
@@ -150,10 +158,13 @@ begin
     end if;
   end if;
 
-  -- shortage: text全置換（3-4）。text単位CAS
+  -- shortage: text全置換（3-4）。text単位CAS。
+  -- 列defaultは'[]'だが空扱いのblank('')も現実に存在する（事実：既存行のばらつき）ため、
+  -- 両辺とも「''または'[]'なら空」に正規化してから比較する（2026-09-05修正）。
   v_new_shortage := v_row.shortage;
   if p_patch ? 'shortage' then
-    if v_row.shortage is distinct from (p_base->>'shortage') then
+    if (not v_created) and
+       nullif(coalesce(v_row.shortage, ''), '[]') is distinct from nullif(coalesce(p_base->>'shortage', ''), '[]') then
       v_conflicts := v_conflicts || jsonb_build_object('shortage', true);
       v_has_conflict := true;
     else
