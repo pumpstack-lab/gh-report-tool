@@ -59,12 +59,14 @@ def start_server():
     return proc
 
 
-def setup_routes(page, *, rpc_responses=None, rpc_calls=None, report_row=None):
+def setup_routes(page, *, rpc_responses=None, rpc_calls=None, report_row=None, staff_rows=None):
     """全RESTエンドポイントをモックする。rpc_responsesはFIFOのリスト（呼ばれるたびに1件pop）。"""
     if rpc_calls is None:
         rpc_calls = []
     if rpc_responses is None:
         rpc_responses = []
+    if staff_rows is None:
+        staff_rows = []
 
     def handle_rest(route):
         req = route.request
@@ -86,7 +88,10 @@ def setup_routes(page, *, rpc_responses=None, rpc_calls=None, report_row=None):
         if "/rest/v1/residents" in url:
             route.fulfill(status=200, content_type="application/json", body=json.dumps(RESIDENTS))
             return
-        if "/rest/v1/staff" in url or "/rest/v1/jp_holidays" in url:
+        if "/rest/v1/staff" in url:
+            route.fulfill(status=200, content_type="application/json", body=json.dumps(staff_rows))
+            return
+        if "/rest/v1/jp_holidays" in url:
             route.fulfill(status=200, content_type="application/json", body="[]")
             return
         if "/rest/v1/diaper_items" in url or "/rest/v1/diaper_events" in url or "/rest/v1/diaper_usage" in url:
@@ -305,6 +310,105 @@ def case6_blank_resident_does_not_block_others_save(pw):
     return ok_sent and ok_only_yamada and ok_no_conflict_shown
 
 
+def case7_pending_conflict_excluded_from_next_save(pw):
+    print("\n--- ケース⑦: 競合を放置したまま別の利用者を書く→放置中のキーは次の保存から除外される（最終ブロッカー） ---")
+    # 実測再現（コーディネーター報告・Getterが本番DBで確認済み）:
+    # 山田で競合発生 → 放置したまま佐藤に新規入力して保存
+    # → ok=false conflicts=["山田太郎"] / DB: 佐藤花子の本文は保存されず
+    # excludePendingConflicts が無いと、放置中の山田太郎（古いbaseのまま）が
+    # 2回目のpatchにも混ざり込み、サーバーが保存“全体”をconflict却下してしまう。
+    browser = pw.chromium.launch()
+    page = new_page(browser)
+    calls = setup_routes(page, report_row=EXISTING_REPORT, rpc_responses=[
+        {"ok": False, "conflicts": {"residents": ["山田太郎"]},
+         "current": {"residents": {"山田太郎": "他端末が書いた本文", "佐藤花子": "既存の本文（佐藤さん）"}}},
+        {"ok": True, "current": {"residents": {"佐藤花子": "佐藤さんの新しい本文"}}},
+    ])
+    page.goto(f"{BASE}/report.html?gh={GH}&date={DATE}", wait_until="domcontentloaded")
+    page.wait_for_selector(".resident-entry textarea", timeout=5000)
+
+    # 1. 山田で conflict を発生させる
+    ta_yamada = page.locator(".resident-entry textarea").first
+    ta_yamada.fill("自分が書いた新本文")
+    ta_yamada.dispatch_event("input")
+    page.wait_for_timeout(3500)
+
+    conflict_banner_visible = page.locator(".resident-entry .conflict-banner").first.is_visible()
+    record("山田で競合バナーが表示される", conflict_banner_visible)
+
+    # 2. バナーを放置したまま佐藤の textarea に入力する
+    ta_sato = page.locator(".resident-entry textarea").nth(1)
+    ta_sato.fill("佐藤さんの新しい本文")
+    ta_sato.dispatch_event("input")
+    page.wait_for_timeout(3200)  # 3秒デバウンス経過直後（表示の3000ms消灯タイマーより前に読む）
+
+    # 3〜5. 2本目のRPCで山田太郎が除外され佐藤花子だけが送られ、ok=true相当で通る
+    ok_second_call_sent = len(calls) == 2
+    record("放置後、佐藤の保存RPCが2本目として飛ぶ", ok_second_call_sent, f"実際: {len(calls)}本")
+
+    second_patch_residents = {}
+    if len(calls) >= 2:
+        second_patch_residents = (calls[1]["body"].get("p_patch") or {}).get("residents", {})
+    ok_yamada_excluded = "山田太郎" not in second_patch_residents
+    record("2本目のpatchに山田太郎が含まれない（放置中のキーは除外される）",
+           ok_yamada_excluded, json.dumps(second_patch_residents, ensure_ascii=False))
+
+    ok_sato_included = second_patch_residents.get("佐藤花子") == "佐藤さんの新しい本文"
+    record("2本目のpatchに佐藤花子が含まれる", ok_sato_included, second_patch_residents.get("佐藤花子"))
+
+    ind_text = page.locator("#draft-indicator").inner_text()
+    ok_saved_ok = "保存しました" in ind_text
+    record("2本目はok=true相当で通り『保存しました』が出る", ok_saved_ok, f"取得値=[{ind_text}]")
+
+    # 山田の競合バナーはまだ未解決のまま残っているはず（放置＝選択していないため）
+    yamada_banner_still_there = page.locator(".resident-entry .conflict-banner").count() > 0
+    record("山田の競合バナーは未解決のまま残る（勝手に消えない）", yamada_banner_still_there)
+
+    browser.close()
+    return (conflict_banner_visible and ok_second_call_sent and ok_yamada_excluded
+            and ok_sato_included and ok_saved_ok and yamada_banner_still_there)
+
+
+STAFF = [
+    # staff.idはSupabase上uuid型（本番はUUID文字列が返る）。テストも文字列で揃える。
+    {"id": "staff-201", "last_name": "田中", "first_name": "一郎", "staff_type": "sewanin"},
+]
+
+
+def case8_topconflict_banner_is_sticky(pw):
+    print("\n--- ケース⑧: 担当者/不足品の自動復帰バナーはsticky（5秒経っても消えない） ---")
+    # workersキーがpatchに乗るには実際にworkerRowsを変更してdirtyにする必要がある
+    # （residentsのtextarea入力だけではworkersはdirtyにならず、conflicts.workersがあっても
+    #   applyServerStateのdirty判定でスルーされてしまう）。
+    browser = pw.chromium.launch()
+    page = new_page(browser)
+    setup_routes(page, report_row=EXISTING_REPORT, staff_rows=STAFF, rpc_responses=[
+        {"ok": False, "conflicts": {"workers": True},
+         "current": {"workers": [{"staff_id": "staff-201", "name": "田中 一郎", "staff_type": "sewanin", "work_type": "weekday_night"}]}},
+    ])
+    page.goto(f"{BASE}/report.html?gh={GH}&date={DATE}", wait_until="domcontentloaded")
+    page.wait_for_selector(".resident-entry textarea", timeout=5000)
+
+    # 担当者を1名追加してスタッフ・勤務種別を選択する（workersをdirtyにする。
+    # 世話人はwork_type未選択のままだとworkerRows上は不完全なままでpatchに反映されない）
+    page.locator("#btn-add-worker").click()
+    selects = page.locator("#workers-container select")
+    selects.nth(0).select_option("staff-201")
+    selects.nth(1).select_option("weekday_night")
+    page.wait_for_timeout(3500)  # 3秒デバウンス
+
+    banner = page.locator("#top-conflict-banner")
+    visible_soon_after = banner.is_visible()
+    record("担当者バナーが表示される", visible_soon_after, banner.inner_text() if visible_soon_after else "")
+
+    page.wait_for_timeout(5500)  # 通常の自動復帰バナー(5秒消灯)なら消えているはずの時間
+    still_visible = banner.is_visible()
+    record("5秒経っても担当者バナーが消えない（sticky）", still_visible)
+
+    browser.close()
+    return visible_soon_after and still_visible
+
+
 def screenshot_widths(pw):
     print("\n--- スクリーンショット（3幅） ---")
     browser = pw.chromium.launch()
@@ -337,6 +441,8 @@ def main():
             r4 = case4_hidden_flushes_immediately(pw)
             r5 = case5_new_date_creation(pw)
             r6 = case6_blank_resident_does_not_block_others_save(pw)
+            r7 = case7_pending_conflict_excluded_from_next_save(pw)
+            r8 = case8_topconflict_banner_is_sticky(pw)
             screenshot_widths(pw)
     finally:
         server.terminate()
@@ -349,7 +455,7 @@ def main():
         print(f"[{mark}] {name}")
         if not ok:
             all_ok = False
-    print(f"\n①: {'PASS' if r1 else 'FAIL'} / ②: {'PASS' if r2 else 'FAIL'} / ③: {'PASS' if r3 else 'FAIL'} / ④: {'PASS' if r4 else 'FAIL'} / ⑤: {'PASS' if r5 else 'FAIL'} / ⑥: {'PASS' if r6 else 'FAIL'}")
+    print(f"\n①: {'PASS' if r1 else 'FAIL'} / ②: {'PASS' if r2 else 'FAIL'} / ③: {'PASS' if r3 else 'FAIL'} / ④: {'PASS' if r4 else 'FAIL'} / ⑤: {'PASS' if r5 else 'FAIL'} / ⑥: {'PASS' if r6 else 'FAIL'} / ⑦: {'PASS' if r7 else 'FAIL'} / ⑧: {'PASS' if r8 else 'FAIL'}")
     sys.exit(0 if all_ok else 1)
 
 

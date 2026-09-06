@@ -1455,6 +1455,11 @@
       const useKeepalive = opts && opts.useKeepalive;
       const current = collectCurrentState();
       const { patch, base } = ReportPatch.buildPatch(lastSaved, current);
+      // 設計§3-3b-3: 未解決の競合キーは patch から外す。
+      // 外さないと、バナーを放置したまま別の利用者を書いた時に古いbaseを再送してしまい、
+      // サーバーが保存“全体”を却下する＝触っていない他利用者の本文まで保存されない
+      // （2026-09-05 ネイト指摘・Getterが本番DBで再現確認）。
+      excludePendingConflicts(patch, base);
 
       if (useKeepalive) {
         // コーディネーター指摘（順序）: 離脱時はRPC（日報本文）を最優先で送る。
@@ -1555,7 +1560,9 @@
             lastSaved[key] = serverVal;
             applyTopLevelValueToForm(key, serverVal);
           });
-          setTopLevelConflictBanner('担当者／不足品など一部の項目が他の職員に更新されました。最新を読み込みました');
+          // ネイト指摘: 自動復帰は「自分が足した担当者行」を無言で捨てうる。担当者は委託料に
+          // 直結するため、消えた可能性を明示して確認を促す（自動で消えない通知にする）。
+          setTopLevelConflictBanner('担当者／不足品が他の職員に更新されました。担当者欄を確認し、自分が消えていれば選び直してください', { sticky: true });
         } else {
           setTopLevelConflictBanner(null);
         }
@@ -1584,6 +1591,23 @@
       ind.textContent = '保存しました ✓';
       document.getElementById('existing-badge').textContent = '記録あり ✓';
       setTimeout(() => ind.textContent = '', 3000);
+    }
+
+    // 未解決の競合キーを patch/base から取り除く（設計§3-3b-3）。
+    // 競合中のキーは「自分の内容を使う／相手の内容を使う」を選ぶまで送らない。
+    // 選択後は pendingConflicts から消えるので、次の保存で通常どおり送られる。
+    function excludePendingConflicts(patch, base) {
+      const conflicted = pendingConflicts.residents || {};
+      const names = Object.keys(conflicted);
+      if (names.length === 0 || !patch.residents) return;
+      names.forEach(name => {
+        delete patch.residents[name];
+        if (base.residents) delete base.residents[name];
+      });
+      if (Object.keys(patch.residents).length === 0) {
+        delete patch.residents;
+        if (base.residents) delete base.residents;
+      }
     }
 
     // applyServerStateが返したcurrent/deferredReplacementsをDOMへ反映する。
@@ -1629,14 +1653,17 @@
       }
     }
 
-    function setTopLevelConflictBanner(message) {
+    function setTopLevelConflictBanner(message, opts) {
       const el = document.getElementById('top-conflict-banner');
       if (!el) return;
       if (message) {
         el.textContent = message;
         el.classList.add('is-visible');
         clearTimeout(setTopLevelConflictBanner._timer);
-        setTopLevelConflictBanner._timer = setTimeout(() => el.classList.remove('is-visible'), 5000);
+        // sticky: 担当者の消失など確認が要る通知は自動で消さない（見落とし防止）
+        if (!(opts && opts.sticky)) {
+          setTopLevelConflictBanner._timer = setTimeout(() => el.classList.remove('is-visible'), 5000);
+        }
       } else {
         el.classList.remove('is-visible');
       }
