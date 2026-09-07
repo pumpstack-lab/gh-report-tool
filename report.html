@@ -9,6 +9,7 @@
   <script src="diaper-logic.js?v=2"></script>
   <script src="scripts/report_guard.js?v=1"></script>
   <script src="scripts/report_patch.js?v=1"></script>
+  <script src="scripts/worktype_rules.js?v=1"></script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
@@ -1167,15 +1168,16 @@
     async function initStaffAndHolidays() {
       const [staffRes, holRes] = await Promise.all([
         db.from('staff').select('*').eq('active', true).order('sort_order'),
-        db.from('jp_holidays').select('holiday_date'),
+        db.from('jp_holidays').select('holiday_date, kind'),
       ]);
       staffList = staffRes.data || [];
+      // national(国民の祝日)/closed(法人の休園日)を区別せず一律で休日として扱う
+      // （設計§4-3: 休日判定にkindの区別は使わない）
       holidaySet = new Set((holRes.data || []).map(r => r.holiday_date));
     }
 
     function isHolidayISO(iso) {
-      const d = new Date(iso + 'T00:00:00');
-      return d.getDay() === 0 || d.getDay() === 6 || holidaySet.has(iso);
+      return WorktypeRules.isClosedDay(iso, holidaySet);
     }
 
     function staffById(id) { return staffList.find(s => s.id === id); }
@@ -1186,28 +1188,31 @@
       return names.join('、');
     }
 
+    // 勤務種別ごとに「勤務日」は異なる（夜勤系のみ前日）。担当者欄には
+    // 勤務種別を問わず代表して「前日」を勤務日として表示する
+    // （設計§4-2: 誤解を防ぐため“どの日の勤務か”を言い切る表記に変える。
+    //  日勤のみの職員には前日表示が不要だが、担当者欄は職員ごとではなく1つの表示のため、
+    //  最も混乱しやすい夜勤系を基準に前日を明示する）。
+    function shiftedWorkDate() {
+      return WorktypeRules.shiftBaseDate(dateEl.value, 'weekday_night');
+    }
+
     function updateHolidayIndicator() {
       const el = document.getElementById('holiday-indicator');
       const iso = dateEl.value;
       if (!iso) { el.textContent = ''; return; }
-      if (isHolidayISO(iso)) {
-        const d = new Date(iso + 'T00:00:00');
-        el.textContent = d.getDay() === 0 || d.getDay() === 6 ? '（この日は休日です）' : '（この日は祝日・休日です）';
-        el.style.color = '#c0392b';
-      } else {
-        el.textContent = '（この日は平日です）';
-        el.style.color = '#888';
-      }
+      const workDate = shiftedWorkDate();
+      const closed = WorktypeRules.isClosedDay(workDate, holidaySet);
+      const dt = new Date(workDate + 'T00:00:00');
+      const days = ['日','月','火','水','木','金','土'];
+      const label = `${dt.getMonth() + 1}月${dt.getDate()}日(${days[dt.getDay()]}${closed ? '・休園日' : ''})`;
+      el.textContent = `（この報告は ${label} の勤務です）`;
+      el.style.color = closed ? '#c0392b' : '#888';
     }
 
     function workerWarning(row) {
       if (!row.staff_id || !row.work_type) return '';
-      const wt = WORK_TYPES.find(w => w.v === row.work_type);
-      if (!wt || wt.holiday === null) return '';
-      const hol = isHolidayISO(dateEl.value);
-      if (hol && wt.holiday === false) return '⚠️ 休日に平日種別が選ばれています';
-      if (!hol && wt.holiday === true) return '⚠️ 平日に休日種別が選ばれています';
-      return '';
+      return WorktypeRules.workTypeWarning(row.work_type, dateEl.value, holidaySet);
     }
 
     function renderWorkerRows() {
@@ -1244,7 +1249,20 @@
           typeSel.value = row.work_type || '';
         }
         typeSel.addEventListener('change', () => {
-          row.work_type = typeSel.value || null;
+          const newType = typeSel.value || null;
+          // 設計§4-2b: 前日が休日・祝日・休園日なのに平日種別が選ばれた時だけ、
+          // 選択の直後に1回だけ確認を出す（自動入力はしない・選ばせる）。
+          // 保存のたびには出さない（scheduleAutoSaveの前段で1回のみ判定）。
+          const warn = WorktypeRules.workTypeWarning(newType, dateEl.value, holidaySet);
+          if (warn && WorktypeRules.HOLIDAY_FLAG[newType] === false) {
+            const workDate = WorktypeRules.shiftBaseDate(dateEl.value, newType);
+            const ok = confirm(`${warn}\n（勤務日: ${workDate}）\nこの種別のまま確定しますか？`);
+            if (!ok) {
+              typeSel.value = row.work_type || '';
+              return;
+            }
+          }
+          row.work_type = newType;
           renderWorkerRows();
           scheduleAutoSave();
         });
@@ -1269,9 +1287,10 @@
         }
         const warn = workerWarning(row);
         if (warn) {
+          const workDate = WorktypeRules.shiftBaseDate(dateEl.value, row.work_type);
           const w = document.createElement('div');
           w.style.cssText = 'width:100%;font-size:12px;color:#c0392b';
-          w.textContent = warn + '（このまま保存もできます）';
+          w.textContent = `${warn}（勤務日: ${workDate}・このまま保存もできます）`;
           div.appendChild(w);
         }
         box.appendChild(div);
