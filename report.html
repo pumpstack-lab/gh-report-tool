@@ -10,6 +10,7 @@
   <script src="scripts/report_guard.js?v=1"></script>
   <script src="scripts/report_patch.js?v=1"></script>
   <script src="scripts/worktype_rules.js?v=1"></script>
+  <script src="scripts/bowel_copy.js?v=1"></script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
@@ -762,7 +763,9 @@
         '#workers-container select, #btn-add-worker, ' +
         '.resident-entry textarea, .short-stay-entry input, .short-stay-entry textarea, ' +
         '#shortage-list input, #shortage-list .btn-remove-shortage, #btn-add-shortage, ' +
-        '.diaper-stepper-btn, #photo-upload-area'
+        '.diaper-stepper-btn, #photo-upload-area, ' +
+        '.bowel-add-btn, .bowel-none-checkbox, .bowel-row-del-btn, ' +
+        '.bowel-time-input, .bowel-stool-select, .bowel-amount-select, .bowel-place-select'
       ).forEach(el => {
         if ('disabled' in el) el.disabled = isDisabled;
         else el.style.pointerEvents = isDisabled ? 'none' : '';
@@ -936,6 +939,298 @@
       });
     }
 
+
+    // ─── 排便状況（利用者×GH×日付・別テーブル bowel_records） ───
+    // 2026-09-07設計: reports.residentsには入れない（差分保存CASの競合を避けるため）。
+    // 本文のautosave/差分保存とは完全に独立した保存経路（テーブルへの直接INSERT/UPDATE/DELETE）。
+    let bowelRecordsByResident = {};   // { residentId: [{id, kind, recorded_at, stool_type, amount, place}] }
+    let bowelLoadedForDate = null;     // ロードが完了している日付（未完了/失敗ならnull）
+    const BOWEL_DRAFT_KEY_PREFIX = 'bowel_draft_';  // localStorage: `${prefix}${ghNum}_${dateISO}_${residentId}`
+
+    function bowelDraftKey(dateISO, residentId) {
+      return `${BOWEL_DRAFT_KEY_PREFIX}${ghNum}_${dateISO}_${residentId}`;
+    }
+
+    function saveBowelDraft(dateISO, residentId, draftRow) {
+      try {
+        localStorage.setItem(bowelDraftKey(dateISO, residentId), JSON.stringify(draftRow));
+      } catch (e) { /* localStorage不可時は無視（下書き機能が無くなるだけ・本体機能は継続） */ }
+    }
+
+    function loadBowelDraft(dateISO, residentId) {
+      try {
+        const raw = localStorage.getItem(bowelDraftKey(dateISO, residentId));
+        return raw ? JSON.parse(raw) : null;
+      } catch (e) { return null; }
+    }
+
+    function clearBowelDraft(dateISO, residentId) {
+      try { localStorage.removeItem(bowelDraftKey(dateISO, residentId)); } catch (e) { /* 無視 */ }
+    }
+
+    async function loadBowelRecords(dateISO) {
+      bowelLoadedForDate = null;
+      bowelRecordsByResident = {};
+      const { data, error } = await db.from('bowel_records')
+        .select('id, resident_id, kind, recorded_at, stool_type, amount, place, sort_order')
+        .eq('gh_num', parseInt(ghNum)).eq('report_date', dateISO)
+        .order('sort_order');
+      if (error) {
+        console.error('bowel_records load failed:', error.message);
+        return; // bowelLoadedForDateはnullのまま＝追加ボタンは無効のまま
+      }
+      (data || []).forEach(row => {
+        if (!bowelRecordsByResident[row.resident_id]) bowelRecordsByResident[row.resident_id] = [];
+        bowelRecordsByResident[row.resident_id].push(row);
+      });
+      bowelLoadedForDate = dateISO;
+    }
+
+    function restoreBowelDrafts(dateISO) {
+      // loadBowelRecords完了後に呼ばれる。生成時点(bowelLoadedForDateがnullの間)に
+      // 「読み込めませんでした」状態で描画済みのブロックを、取得結果で描き直す
+      // （下書き復元もこのタイミングで一緒に行う）。
+      document.querySelectorAll('.bowel-block').forEach(block => {
+        const residentId = block.dataset.residentId;
+        const draft = loadBowelDraft(dateISO, residentId);
+        if (draft && bowelRowsFor(residentId).filter(r => r.kind !== 'none').length === 0) {
+          // 未完成の下書きを復元する（ネイト指摘: タブが落ちても消えない）
+          bowelRowsFor(residentId).push({ id: null, kind: 'record',
+            recorded_at: draft.recorded_at, stool_type: draft.stool_type,
+            amount: draft.amount, place: draft.place });
+        }
+        renderBowelRows(block);
+      });
+    }
+
+    function bindBowelTextareaHint(container, residentName) {
+      // 設計§5-2: 本文に「排便」を含む文字が入力されたら、その場で誘導を出す（保存は止めない）
+      const ta = container.querySelector('textarea');
+      const hint = document.createElement('div');
+      hint.className = 'bowel-textarea-hint';
+      hint.style.cssText = 'display:none;font-size:12px;color:#c0392b;margin-top:4px';
+      hint.textContent = '排便は下の「排便状況」欄へ入力してください';
+      ta.insertAdjacentElement('afterend', hint);
+      ta.addEventListener('input', () => {
+        hint.style.display = ta.value.includes('排便') ? '' : 'none';
+      });
+    }
+
+    const BOWEL_STOOL_TYPES = ['普通便', '硬便', '軟便', '下痢便'];
+    const BOWEL_AMOUNTS = ['中量', '多量', '少量', '微量'];
+    const BOWEL_PLACES = ['便器', 'パッド内', '失便'];
+
+    function renderBowelSection(container, residentIdArg, residentName) {
+      const residentId = String(residentIdArg);
+      const block = document.createElement('div');
+      block.className = 'bowel-block';
+      block.dataset.residentId = residentId;
+      block.dataset.residentName = residentName;
+      block.innerHTML = `
+        <div class="bowel-header" style="display:flex;justify-content:space-between;align-items:center;margin-top:10px">
+          <div class="bowel-label" style="font-size:13px;font-weight:bold;color:#4a90d9">排便状況</div>
+          <button type="button" class="bowel-copy-btn" style="display:none;padding:4px 10px;font-size:12px;background:#fff;color:#4a90d9;border:1px solid #4a90d9;border-radius:6px">コピー</button>
+        </div>
+        <label class="bowel-none-row" style="display:flex;align-items:center;gap:6px;font-size:13px;margin:6px 0">
+          <input type="checkbox" class="bowel-none-checkbox">排便なし
+        </label>
+        <div class="bowel-rows"></div>
+        <button type="button" class="bowel-add-btn" style="margin-top:6px;padding:8px 14px;background:#fff;color:#4a90d9;border:1px dashed #4a90d9;border-radius:8px" disabled>＋ 排便を追加</button>
+        <div class="bowel-unavailable-msg" style="display:none;font-size:12px;color:#e74c3c;margin-top:6px">排便記録を読み込めませんでした。再読み込みしてください</div>
+      `;
+      container.appendChild(block);
+      renderBowelRows(block);
+      return block;
+    }
+
+    function bowelRowsFor(residentId) {
+      if (!bowelRecordsByResident[residentId]) bowelRecordsByResident[residentId] = [];
+      return bowelRecordsByResident[residentId];
+    }
+
+    function renderBowelRows(block) {
+      const residentId = block.dataset.residentId;
+      const residentName = block.dataset.residentName;
+      const rows = bowelRowsFor(residentId);
+      const noneRow = rows.find(r => r.kind === 'none');
+      const recordRows = rows.filter(r => r.kind !== 'none');
+
+      const noneCheckbox = block.querySelector('.bowel-none-checkbox');
+      noneCheckbox.checked = !!noneRow;
+      // 排他: 記録行が1件でもあれば「排便なし」チェックを無効化する（設計§5）
+      noneCheckbox.disabled = recordRows.length > 0 || !bowelLoadedForDate;
+
+      const rowsContainer = block.querySelector('.bowel-rows');
+      rowsContainer.style.display = noneRow ? 'none' : '';
+      rowsContainer.innerHTML = '';
+      recordRows.forEach((row, idx) => renderBowelRow(block, rowsContainer, row, idx));
+
+      const addBtn = block.querySelector('.bowel-add-btn');
+      addBtn.disabled = !bowelLoadedForDate || !!noneRow;
+
+      const copyBtn = block.querySelector('.bowel-copy-btn');
+      const copyText = BowelCopy.buildBowelCopyText(residentName, recordRows);
+      copyBtn.style.display = copyText ? '' : 'none';
+
+      const unavailable = block.querySelector('.bowel-unavailable-msg');
+      unavailable.style.display = bowelLoadedForDate ? 'none' : '';
+    }
+
+    function renderBowelRow(block, rowsContainer, row, idx) {
+      const residentId = block.dataset.residentId;
+      const rowEl = document.createElement('div');
+      rowEl.className = 'bowel-row';
+      rowEl.dataset.rowId = row.id || `draft-${idx}`;
+      rowEl.style.cssText = 'border:1px solid #eee;border-radius:8px;padding:8px;margin-bottom:8px';
+      rowEl.innerHTML = `
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+          <input type="time" class="bowel-time-input" value="${row.recorded_at || ''}" style="padding:6px;border:1px solid #ddd;border-radius:6px">
+          <button type="button" class="bowel-row-del-btn" style="min-width:36px;min-height:36px">✕</button>
+        </div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap">
+          <select class="bowel-stool-select" style="flex:1;min-width:90px;padding:6px;border:1px solid #ddd;border-radius:6px">
+            <option value="">便性状を選択</option>
+            ${BOWEL_STOOL_TYPES.map(t => `<option value="${t}"${row.stool_type === t ? ' selected' : ''}>${t}</option>`).join('')}
+          </select>
+          <select class="bowel-amount-select" style="flex:1;min-width:80px;padding:6px;border:1px solid #ddd;border-radius:6px">
+            <option value="">量を選択</option>
+            ${BOWEL_AMOUNTS.map(a => `<option value="${a}"${row.amount === a ? ' selected' : ''}>${a}</option>`).join('')}
+          </select>
+          <select class="bowel-place-select" style="flex:1;min-width:90px;padding:6px;border:1px solid #ddd;border-radius:6px">
+            <option value="">便器を選択</option>
+            ${BOWEL_PLACES.map(p => `<option value="${p}"${row.place === p ? ' selected' : ''}>${p}</option>`).join('')}
+          </select>
+        </div>
+        <div class="bowel-row-error" style="display:none;color:#e74c3c;font-size:12px;margin-top:4px">未入力の項目があります</div>
+      `;
+      rowsContainer.appendChild(rowEl);
+
+      function currentDraft() {
+        return {
+          recorded_at: rowEl.querySelector('.bowel-time-input').value || null,
+          stool_type: rowEl.querySelector('.bowel-stool-select').value || null,
+          amount: rowEl.querySelector('.bowel-amount-select').value || null,
+          place: rowEl.querySelector('.bowel-place-select').value || null,
+        };
+      }
+
+      async function onFieldChange() {
+        const draft = currentDraft();
+        const complete = draft.recorded_at && draft.stool_type && draft.amount && draft.place;
+        const errEl = rowEl.querySelector('.bowel-row-error');
+        if (!complete) {
+          errEl.style.display = '';
+          saveBowelDraft(dateEl.value, residentId, { idx, ...draft });
+          return;
+        }
+        errEl.style.display = 'none';
+        clearBowelDraft(dateEl.value, residentId);
+        await persistBowelRow(residentId, block.dataset.residentName, row, draft);
+      }
+
+      rowEl.querySelectorAll('input, select').forEach(el => {
+        el.addEventListener('change', onFieldChange);
+      });
+      rowEl.querySelector('.bowel-row-del-btn').addEventListener('click', async () => {
+        if (row.id) {
+          await db.from('bowel_records').delete().eq('id', row.id);
+        }
+        const rows = bowelRowsFor(residentId);
+        const i = rows.indexOf(row);
+        if (i >= 0) rows.splice(i, 1);
+        clearBowelDraft(dateEl.value, residentId);
+        renderBowelRows(block);
+      });
+    }
+
+    async function persistBowelRow(residentId, residentName, row, draft) {
+      const payload = {
+        gh_num: parseInt(ghNum),
+        report_date: dateEl.value,
+        resident_id: parseInt(residentId, 10),
+        resident_name: residentName,
+        kind: 'record',
+        recorded_at: draft.recorded_at,
+        stool_type: draft.stool_type,
+        amount: draft.amount,
+        place: draft.place,
+        sort_order: bowelRowsFor(residentId).indexOf(row),
+      };
+      if (row.id) {
+        const { error } = await db.from('bowel_records').update(payload).eq('id', row.id);
+        if (error) console.error('bowel_records update failed:', error.message);
+      } else {
+        const { data, error } = await db.from('bowel_records').insert(payload).select('id');
+        if (error) { console.error('bowel_records insert failed:', error.message); return; }
+        if (data && data[0]) row.id = data[0].id;
+      }
+      Object.assign(row, draft, { kind: 'record' });
+    }
+
+    function bindBowelSectionEvents(block) {
+      const residentId = block.dataset.residentId;
+      const residentName = block.dataset.residentName;
+
+      block.querySelector('.bowel-add-btn').addEventListener('click', () => {
+        bowelRowsFor(residentId).push({ id: null, kind: 'record', recorded_at: null, stool_type: null, amount: null, place: null });
+        renderBowelRows(block);
+      });
+
+      block.querySelector('.bowel-none-checkbox').addEventListener('change', async (e) => {
+        const rows = bowelRowsFor(residentId);
+        if (e.target.checked) {
+          const { data, error } = await db.from('bowel_records').insert({
+            gh_num: parseInt(ghNum), report_date: dateEl.value, resident_id: parseInt(residentId, 10),
+            resident_name: residentName, kind: 'none',
+          }).select('id');
+          if (error) { console.error('bowel_records(none) insert failed:', error.message); e.target.checked = false; return; }
+          bowelRecordsByResident[residentId] = [{ id: data && data[0] && data[0].id, kind: 'none' }];
+        } else {
+          const noneRow = rows.find(r => r.kind === 'none');
+          if (noneRow && noneRow.id) await db.from('bowel_records').delete().eq('id', noneRow.id);
+          bowelRecordsByResident[residentId] = [];
+        }
+        renderBowelRows(block);
+      });
+
+      block.querySelector('.bowel-copy-btn').addEventListener('click', async () => {
+        const recordRows = bowelRowsFor(residentId).filter(r => r.kind !== 'none');
+        const text = BowelCopy.buildBowelCopyText(residentName, recordRows);
+        const btn = block.querySelector('.bowel-copy-btn');
+        const showCopied = () => {
+          const orig = btn.textContent;
+          btn.textContent = 'コピーしました';
+          setTimeout(() => { btn.textContent = orig; }, 2000);
+        };
+        try {
+          await navigator.clipboard.writeText(text);
+          showCopied();
+        } catch (e) {
+          // フォールバック1: execCommand('copy')
+          try {
+            const ta = document.createElement('textarea');
+            ta.value = text;
+            ta.style.position = 'fixed';
+            ta.style.opacity = '0';
+            document.body.appendChild(ta);
+            ta.focus();
+            ta.select();
+            const ok = document.execCommand('copy');
+            document.body.removeChild(ta);
+            if (ok) { showCopied(); return; }
+          } catch (e2) { /* フォールバック2へ */ }
+          // フォールバック2: テキストを選択状態にして長押しコピーを促す
+          const ta2 = document.createElement('textarea');
+          ta2.value = text;
+          ta2.readOnly = true;
+          ta2.style.cssText = 'width:100%;height:60px;margin-top:6px';
+          block.appendChild(ta2);
+          ta2.focus();
+          ta2.select();
+          alert('長押しでコピーしてください');
+        }
+      });
+    }
 
     // ─── 個人の希望品（利用者×GH・別テーブル personal_shortage_items・蓄積型） ───
     // 2026-09-04設計: 日付単位を廃止し、GHごとに1回だけ取得する「未購入のみ」の読み取り専用リスト＋追加のみ。
@@ -1205,8 +1500,16 @@
       const closed = WorktypeRules.isClosedDay(workDate, holidaySet);
       const dt = new Date(workDate + 'T00:00:00');
       const days = ['日','月','火','水','木','金','土'];
-      const label = `${dt.getMonth() + 1}月${dt.getDate()}日(${days[dt.getDay()]}${closed ? '・休園日' : ''})`;
-      el.textContent = `（この報告は ${label} の勤務です）`;
+      // 「休園日」は土日ではなく、祝日マスタに登録された日（国民の祝日・盆/正月/GW等）にだけ付ける。
+      // isClosedDay は土日も true を返すため、そのまま使うと「9月5日(土・休園日)」と出て誤解を招く
+      // （2026-09-08 Getterがスクショ相当の実挙動を確認して修正）。
+      const isWeekend = dt.getDay() === 0 || dt.getDay() === 6;
+      const closedNote = (closed && !isWeekend) ? '・休園日' : '';
+      const label = `${dt.getMonth() + 1}月${dt.getDate()}日(${days[dt.getDay()]}${closedNote})`;
+      // 日勤系(holiday_day/holiday_day_night/six_hour)の勤務日は報告日そのものなので、
+      // 「前日の勤務です」と言い切ると日勤の職員に誤った案内になる。夜勤を基準に案内しつつ
+      // 断定を避ける（設計§4-1: 前日オフセットは夜勤系のみ）。
+      el.textContent = `（夜勤はこの報告の前日＝${label} の勤務です）`;
       el.style.color = closed ? '#c0392b' : '#888';
     }
 
@@ -1851,6 +2154,9 @@
       snapshotLastSaved(data);
       pendingConflicts = {};
       pendingDeferredReplacements = {};
+      // 排便記録はその日付のデータなので日付ごとに取り直す（個人の希望品＝GHごと1回とは異なる）
+      await loadBowelRecords(dateISO);
+      restoreBowelDrafts(dateISO);
       reportLoadedFor = dateISO;
       reportDirty = false; // ここでDOMはサーバー内容と一致済みなので、ロード中の入力(blocked)は破棄してよい
       setFormInputsDisabled(false);
@@ -2092,6 +2398,9 @@
             <div class="resident-name-label">${escapeHtml(r.name)}</div>
             <textarea placeholder="${escapeHtml(r.name)}の様子を記入（帰宅〜朝の流れ）..."></textarea>
           `;
+          bindBowelTextareaHint(div, r.name);
+          const bowelBlock = renderBowelSection(div, r.id, r.name);
+          bindBowelSectionEvents(bowelBlock);
           renderDiaperStepper(div, r.id);
           renderPersonalItems(div, r.id, r.name);
           container.appendChild(div);
@@ -2163,6 +2472,9 @@
       snapshotLastSaved(reportData);
       pendingConflicts = {};
       pendingDeferredReplacements = {};
+      // 排便記録はその日付のデータなので日付ごとに取り直す（個人の希望品＝GHごと1回とは異なる）
+      await loadBowelRecords(dateISO);
+      restoreBowelDrafts(dateISO);
       reportLoadedFor = dateISO;
       setFormInputsDisabled(false);
       setLoadGuardBanner(null);
