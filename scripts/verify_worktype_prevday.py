@@ -88,9 +88,12 @@ def case1_indicator_shows_prev_day(pw):
     page.goto(f"{BASE}/report.html?gh={GH}&date={DATE}", wait_until="domcontentloaded")
     page.wait_for_selector(".resident-entry textarea", timeout=5000)
     text = page.locator("#holiday-indicator").inner_text()
-    # DATE=2026-08-16(日)の前日は2026-08-15(土)＝休日
-    ok = "8月15日" in text and "休園日" in text
-    record("前日(8/15・休園日)が表示される", ok, text)
+    # DATE=2026-08-16(日)の前日は2026-08-15(土)。
+    # 土日は「休日」であって「休園日」ではない（休園日＝祝日マスタに登録された盆/正月/GW等）。
+    # 土曜に「休園日」と出すのは誤表示なので、付いていないことまで検証する
+    # （2026-09-08 Getterが実挙動を確認して実装とテストの両方を修正）。
+    ok = "8月15日" in text and "土" in text and "休園日" not in text
+    record("前日(8/15土)が表示され、土曜に休園日と付かない", ok, text)
     browser.close()
     return ok
 
