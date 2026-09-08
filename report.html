@@ -2349,7 +2349,7 @@
       const url = `${base}summary.html?gh=${ghNum}&date=${dateEl.value}`;
       if (navigator.clipboard && navigator.clipboard.writeText) {
         navigator.clipboard.writeText(url).then(() => {
-          alert('URLをコピーしました！\n管理者へ送信してください。\n（admin.htmlでもリアルタイム確認できます）');
+          alert('URLをコピーしました！\n管理者へ送信してください。\n（管理画面でもリアルタイム確認できます）');
         }).catch(() => prompt('以下のURLをコピーして送信してください：', url));
       } else {
         prompt('以下のURLをコピーして送信してください：', url);
