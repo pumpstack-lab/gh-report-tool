@@ -951,17 +951,24 @@
       return `${BOWEL_DRAFT_KEY_PREFIX}${ghNum}_${dateISO}_${residentId}`;
     }
 
-    function saveBowelDraft(dateISO, residentId, draftRow) {
+    // 下書きは利用者1人につき「未完成行の配列」を1キーに保存する（2026-09-08修正）。
+    // 1行だけを保存/削除すると他の未完成行を巻き込んで消してしまうため、
+    // 呼び出し側は必ずその利用者の未完成行を全部集めてから saveBowelDraft/clearBowelDraft を呼ぶこと。
+    function saveBowelDraft(dateISO, residentId, draftRows) {
       try {
-        localStorage.setItem(bowelDraftKey(dateISO, residentId), JSON.stringify(draftRow));
+        if (!draftRows || draftRows.length === 0) {
+          clearBowelDraft(dateISO, residentId);
+          return;
+        }
+        localStorage.setItem(bowelDraftKey(dateISO, residentId), JSON.stringify(draftRows));
       } catch (e) { /* localStorage不可時は無視（下書き機能が無くなるだけ・本体機能は継続） */ }
     }
 
     function loadBowelDraft(dateISO, residentId) {
       try {
         const raw = localStorage.getItem(bowelDraftKey(dateISO, residentId));
-        return raw ? JSON.parse(raw) : null;
-      } catch (e) { return null; }
+        return raw ? JSON.parse(raw) : [];
+      } catch (e) { return []; }
     }
 
     function clearBowelDraft(dateISO, residentId) {
@@ -990,14 +997,20 @@
       // loadBowelRecords完了後に呼ばれる。生成時点(bowelLoadedForDateがnullの間)に
       // 「読み込めませんでした」状態で描画済みのブロックを、取得結果で描き直す
       // （下書き復元もこのタイミングで一緒に行う）。
+      // 2026-09-08修正: 保存済み記録が何件あっても下書き（未完成行）は必ず末尾に復元する
+      // （以前は「record行が0件のときだけ」復元しており、保存済み行が1件でもあると
+      //  下書きが永久に復元されずlocalStorageに残り続けるバグがあった）。
       document.querySelectorAll('.bowel-block').forEach(block => {
         const residentId = block.dataset.residentId;
-        const draft = loadBowelDraft(dateISO, residentId);
-        if (draft && bowelRowsFor(residentId).filter(r => r.kind !== 'none').length === 0) {
-          // 未完成の下書きを復元する（ネイト指摘: タブが落ちても消えない）
-          bowelRowsFor(residentId).push({ id: null, kind: 'record',
-            recorded_at: draft.recorded_at, stool_type: draft.stool_type,
-            amount: draft.amount, place: draft.place });
+        const draftRows = loadBowelDraft(dateISO, residentId);
+        const hasNoneRow = bowelRowsFor(residentId).some(r => r.kind === 'none');
+        if (draftRows.length > 0 && !hasNoneRow) {
+          // 未完成の下書きを全行復元する（ネイト指摘: タブが落ちても消えない）
+          draftRows.forEach(draft => {
+            bowelRowsFor(residentId).push({ id: null, kind: 'record',
+              recorded_at: draft.recorded_at, stool_type: draft.stool_type,
+              amount: draft.amount, place: draft.place });
+          });
         }
         renderBowelRows(block);
       });
@@ -1034,6 +1047,7 @@
         <label class="bowel-none-row" style="display:flex;align-items:center;gap:6px;font-size:13px;margin:6px 0">
           <input type="checkbox" class="bowel-none-checkbox">排便なし
         </label>
+        <div class="bowel-none-error" style="display:none;color:#e74c3c;font-size:12px;margin:-4px 0 6px">保存できませんでした。通信を確認してもう一度お試しください</div>
         <div class="bowel-rows"></div>
         <button type="button" class="bowel-add-btn" style="margin-top:6px;padding:8px 14px;background:#fff;color:#4a90d9;border:1px dashed #4a90d9;border-radius:8px" disabled>＋ 排便を追加</button>
         <div class="bowel-unavailable-msg" style="display:none;font-size:12px;color:#e74c3c;margin-top:6px">排便記録を読み込めませんでした。再読み込みしてください</div>
@@ -1074,6 +1088,19 @@
 
       const unavailable = block.querySelector('.bowel-unavailable-msg');
       unavailable.style.display = bowelLoadedForDate ? 'none' : '';
+
+      // コピーのフォールバック2（要配慮個人情報を含むtextarea）は、行の追加/削除/保存等で
+      // このブロックが再描画されるたびに必ず消す（共有タブレットに残さないため。
+      // 2026-09-08セキュリティレビュー指摘。日付切替・利用者ブロック再描画も
+      // 内部的にrenderBowelRowsを経由するため、この1箇所で全経路をカバーする）。
+      const fallback = block.querySelector('.bowel-copy-fallback');
+      if (fallback) fallback.remove();
+
+      // 「排便なし」の通信エラー表示は、成功して再描画されるタイミングでのみ
+      // ここに到達する（失敗時はハンドラ内でreturnしrenderBowelRowsを呼ばない）ため、
+      // 無条件で消してよい
+      const noneErrEl = block.querySelector('.bowel-none-error');
+      if (noneErrEl) noneErrEl.style.display = 'none';
     }
 
     function renderBowelRow(block, rowsContainer, row, idx) {
@@ -1120,35 +1147,56 @@
         const errEl = rowEl.querySelector('.bowel-row-error');
         if (!complete) {
           errEl.style.display = '';
-          saveBowelDraft(dateEl.value, residentId, { idx, ...draft });
+          Object.assign(row, draft);
+          saveDraftsForResident(residentId);
           return;
         }
         errEl.style.display = 'none';
-        clearBowelDraft(dateEl.value, residentId);
-        await persistBowelRow(residentId, block.dataset.residentName, row, draft);
+        Object.assign(row, draft);
+        saveDraftsForResident(residentId); // この行は完成扱いになるので集合から外れる。他の未完成行は残す
+        await persistBowelRow(residentId, block.dataset.residentName, row, draft, rowEl);
       }
 
       rowEl.querySelectorAll('input, select').forEach(el => {
         el.addEventListener('change', onFieldChange);
       });
       rowEl.querySelector('.bowel-row-del-btn').addEventListener('click', async () => {
+        // 2026-09-08修正（ネイト指摘）: ロード完了前の日付ズレでの削除を防ぐ
+        if (bowelLoadedForDate !== dateEl.value) return;
         if (row.id) {
-          await db.from('bowel_records').delete().eq('id', row.id);
+          const { error } = await db.from('bowel_records').delete().eq('id', row.id);
+          if (error) {
+            console.error('bowel_records delete failed:', error.message);
+            // 削除失敗時は行を消さない（消えたまま＝現場が気づけない事故を防ぐ）
+            showBowelRowError(rowEl, '削除できませんでした。通信を確認してもう一度お試しください');
+            return;
+          }
         }
         const rows = bowelRowsFor(residentId);
         const i = rows.indexOf(row);
         if (i >= 0) rows.splice(i, 1);
-        clearBowelDraft(dateEl.value, residentId);
+        saveDraftsForResident(residentId);
         renderBowelRows(block);
       });
     }
 
-    async function persistBowelRow(residentId, residentName, row, draft) {
-      const payload = {
-        gh_num: parseInt(ghNum),
-        report_date: dateEl.value,
-        resident_id: parseInt(residentId, 10),
-        resident_name: residentName,
+    // その利用者の record行のうち未完成なもの（4項目が揃っていないもの）を全部集めて
+    // 1キーに保存し直す。0件になれば下書きキー自体を消す（2026-09-08修正）。
+    function saveDraftsForResident(residentId) {
+      const incomplete = bowelRowsFor(residentId)
+        .filter(r => r.kind !== 'none')
+        .filter(r => !(r.recorded_at && r.stool_type && r.amount && r.place))
+        .map(r => ({ recorded_at: r.recorded_at || null, stool_type: r.stool_type || null,
+          amount: r.amount || null, place: r.place || null }));
+      saveBowelDraft(dateEl.value, residentId, incomplete);
+    }
+
+    async function persistBowelRow(residentId, residentName, row, draft, rowEl) {
+      // 2026-09-08修正（ネイト指摘・2026-09-04本文消失事故と同型）: loadBowelRecordsの
+      // await中に古い日付のDOMが残ったまま操作されると、別日付へUPDATEが飛んでしまう。
+      // 現在ロード済みの日付と一致しない操作は中断する（既存のreportLoadedForガードと同じ考え方）。
+      if (bowelLoadedForDate !== dateEl.value) return;
+      const updateFields = {
         kind: 'record',
         recorded_at: draft.recorded_at,
         stool_type: draft.stool_type,
@@ -1157,14 +1205,50 @@
         sort_order: bowelRowsFor(residentId).indexOf(row),
       };
       if (row.id) {
-        const { error } = await db.from('bowel_records').update(payload).eq('id', row.id);
-        if (error) console.error('bowel_records update failed:', error.message);
+        // UPDATEはgh_num/report_date/resident_idを書き換えない
+        // （既存行のキーを触る必要は無い。触ると日付切替の隙間で別日付に移動する事故になる）
+        const { error } = await db.from('bowel_records').update(updateFields).eq('id', row.id);
+        if (error) {
+          console.error('bowel_records update failed:', error.message);
+          showBowelRowError(rowEl, '保存できませんでした。通信を確認してもう一度お試しください');
+          return;
+        }
       } else {
+        const payload = {
+          gh_num: parseInt(ghNum),
+          report_date: dateEl.value,
+          resident_id: parseInt(residentId, 10),
+          resident_name: residentName,
+          ...updateFields,
+        };
         const { data, error } = await db.from('bowel_records').insert(payload).select('id');
-        if (error) { console.error('bowel_records insert failed:', error.message); return; }
+        if (error) {
+          console.error('bowel_records insert failed:', error.message);
+          showBowelRowError(rowEl, '保存できませんでした。通信を確認してもう一度お試しください');
+          return;
+        }
         if (data && data[0]) row.id = data[0].id;
       }
+      clearBowelRowError(rowEl);
       Object.assign(row, draft, { kind: 'record' });
+    }
+
+    // 2026-09-08修正（ネイト指摘）: 保存失敗が console.error だけでは現場に伝わらない。
+    // 既存の「未入力の項目があります」表示(.bowel-row-error)を再利用し、通信失敗時も同じ場所に赤字で出す。
+    function showBowelRowError(rowEl, message) {
+      if (!rowEl) return;
+      const errEl = rowEl.querySelector('.bowel-row-error');
+      if (!errEl) return;
+      errEl.textContent = message;
+      errEl.style.display = '';
+    }
+
+    function clearBowelRowError(rowEl) {
+      if (!rowEl) return;
+      const errEl = rowEl.querySelector('.bowel-row-error');
+      if (!errEl) return;
+      errEl.textContent = '未入力の項目があります';
+      errEl.style.display = 'none';
     }
 
     function bindBowelSectionEvents(block) {
@@ -1177,19 +1261,36 @@
       });
 
       block.querySelector('.bowel-none-checkbox').addEventListener('change', async (e) => {
+        // 2026-09-08修正（ネイト指摘）: ロード完了前の日付ズレでの登録/解除を防ぐ
+        if (bowelLoadedForDate !== dateEl.value) { e.target.checked = !e.target.checked; return; }
+        const noneErrEl = block.querySelector('.bowel-none-error');
         const rows = bowelRowsFor(residentId);
         if (e.target.checked) {
           const { data, error } = await db.from('bowel_records').insert({
             gh_num: parseInt(ghNum), report_date: dateEl.value, resident_id: parseInt(residentId, 10),
             resident_name: residentName, kind: 'none',
           }).select('id');
-          if (error) { console.error('bowel_records(none) insert failed:', error.message); e.target.checked = false; return; }
+          if (error) {
+            console.error('bowel_records(none) insert failed:', error.message);
+            e.target.checked = false;
+            noneErrEl.style.display = '';
+            return;
+          }
           bowelRecordsByResident[residentId] = [{ id: data && data[0] && data[0].id, kind: 'none' }];
         } else {
           const noneRow = rows.find(r => r.kind === 'none');
-          if (noneRow && noneRow.id) await db.from('bowel_records').delete().eq('id', noneRow.id);
+          if (noneRow && noneRow.id) {
+            const { error } = await db.from('bowel_records').delete().eq('id', noneRow.id);
+            if (error) {
+              console.error('bowel_records(none) delete failed:', error.message);
+              e.target.checked = true; // 削除できなかったので「排便なし」のまま戻す（消えたまま扱いにしない）
+              noneErrEl.style.display = '';
+              return;
+            }
+          }
           bowelRecordsByResident[residentId] = [];
         }
+        noneErrEl.style.display = 'none';
         renderBowelRows(block);
       });
 
@@ -1219,12 +1320,28 @@
             document.body.removeChild(ta);
             if (ok) { showCopied(); return; }
           } catch (e2) { /* フォールバック2へ */ }
-          // フォールバック2: テキストを選択状態にして長押しコピーを促す
+          // フォールバック2: テキストを選択状態にして長押しコピーを促す。
+          // 排便記録は要配慮個人情報（健康情報）・共有タブレット運用のため、
+          // 表示したtextareaは「閉じる」ボタンでユーザーが明示的に消せるようにする
+          // （blurでの自動消去はiOSで意図せず発火し長押しコピー前に消えるため使わない。
+          //  2026-09-08セキュリティレビュー指摘）。
+          const existing = block.querySelector('.bowel-copy-fallback');
+          if (existing) existing.remove();
+          const wrap = document.createElement('div');
+          wrap.className = 'bowel-copy-fallback';
+          wrap.style.cssText = 'margin-top:6px';
           const ta2 = document.createElement('textarea');
           ta2.value = text;
           ta2.readOnly = true;
-          ta2.style.cssText = 'width:100%;height:60px;margin-top:6px';
-          block.appendChild(ta2);
+          ta2.style.cssText = 'width:100%;height:60px';
+          const closeBtn = document.createElement('button');
+          closeBtn.type = 'button';
+          closeBtn.textContent = '閉じる';
+          closeBtn.style.cssText = 'margin-top:4px;padding:6px 12px;font-size:12px;background:#fff;color:#666;border:1px solid #ccc;border-radius:6px';
+          closeBtn.addEventListener('click', () => wrap.remove());
+          wrap.appendChild(ta2);
+          wrap.appendChild(closeBtn);
+          block.appendChild(wrap);
           ta2.focus();
           ta2.select();
           alert('長押しでコピーしてください');
