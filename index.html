@@ -6,6 +6,8 @@
   <title>こもれびホーム 業務日報</title>
   <script src="config.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="scripts/auth_gate.js?v=1"></script>
+  <script src="scripts/auth_ui.js?v=1"></script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
@@ -257,8 +259,10 @@
       updateBadges(selectedDate);
     });
 
-    // 初期表示：今日のバッジ
-    updateBadges(selectedDate);
+    // 初期表示：今日のバッジ（ログイン完了後に実行する）
+    AuthUI.requireLogin(db).then(() => {
+      updateBadges(selectedDate);
+    });
   </script>
 </body>
 </html>

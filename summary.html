@@ -6,6 +6,8 @@
   <title>報告書 - こもれびホーム</title>
   <script src="config.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="scripts/auth_gate.js?v=1"></script>
+  <script src="scripts/auth_ui.js?v=1"></script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
@@ -280,7 +282,9 @@
       render(ghName, dateStr, data.reporter, data.residents, data.updated_at, data.shortage);
     }
 
-    load();
+    AuthUI.requireLogin(db).then(() => {
+      load();
+    });
   </script>
 </body>
 </html>

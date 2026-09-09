@@ -6,6 +6,8 @@
   <title>過去記録 - こもれびホーム</title>
   <script src="config.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="scripts/auth_gate.js?v=1"></script>
+  <script src="scripts/auth_ui.js?v=1"></script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
@@ -414,7 +416,9 @@
       document.getElementById('modal').style.display = 'none';
     }
 
-    loadList('1');
+    AuthUI.requireLogin(db).then(() => {
+      loadList('1');
+    });
   </script>
 </body>
 </html>
