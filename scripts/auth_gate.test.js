@@ -69,3 +69,28 @@ test('レート制限は時間をおくよう伝える', () => {
   const msg = describeAuthError({ message: 'Email rate limit exceeded' });
   assert.match(msg, /しばらく|時間/);
 });
+
+// ── 現場はパスワードだけ入力する（IDは埋め込みの固定値・2026-09-09 オーナー決定）──
+const { FIXED_LOGIN_ID, buildCredentials } = require('./auth_gate.js');
+
+test('固定IDはメールアドレスの形をしている（Supabase Authの要件）', () => {
+  assert.match(FIXED_LOGIN_ID, /^[^@\s]+@[^@\s]+\.[^@\s]+$/);
+});
+
+test('パスワードだけ渡せば固定IDとの組で認証情報が出来る', () => {
+  const c = buildCredentials('test-password-xyz');
+  assert.strictEqual(c.email, FIXED_LOGIN_ID);
+  assert.strictEqual(c.password, 'test-password-xyz');
+});
+
+test('前後の空白は落とす（現場のコピペ・音声入力対策）', () => {
+  const c = buildCredentials('  test-password-xyz  ');
+  assert.strictEqual(c.password, 'test-password-xyz');
+});
+
+test('パスワードが空なら認証情報を作らない', () => {
+  assert.strictEqual(buildCredentials(''), null);
+  assert.strictEqual(buildCredentials('   '), null);
+  assert.strictEqual(buildCredentials(null), null);
+  assert.strictEqual(buildCredentials(undefined), null);
+});

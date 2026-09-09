@@ -57,5 +57,24 @@
     return 'ログインできませんでした。時間をおいて再度お試しください。';
   }
 
-  return { needsLogin, isSessionValid, describeAuthError };
+  // 現場が入力するのはパスワードだけ（2026-09-09 オーナー決定）。
+  // Supabase Auth はアカウントがメールアドレス前提のため、IDは職員に見せず
+  // ここの固定値を使う。実在しないドメインでよい（メールは送らない）。
+  // ⚠️ これは秘密ではない（誰でもJSを読める）。鍵はパスワードとDB側のポリシー。
+  const FIXED_LOGIN_ID = 'staff@komorebi.local';
+
+  /**
+   * パスワードだけから signInWithPassword に渡す認証情報を作る。
+   * 空・空白のみの入力では作らない（無駄な通信とレート制限の消費を防ぐ）。
+   * @param {string|null} password
+   * @returns {{email: string, password: string}|null}
+   */
+  function buildCredentials(password) {
+    if (typeof password !== 'string') return null;
+    const pw = password.trim();
+    if (!pw) return null;
+    return { email: FIXED_LOGIN_ID, password: pw };
+  }
+
+  return { needsLogin, isSessionValid, describeAuthError, FIXED_LOGIN_ID, buildCredentials };
 });

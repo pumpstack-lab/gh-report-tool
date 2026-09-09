@@ -65,9 +65,6 @@
         <p class="sub">初回のみログインが必要です。<br>次回からは自動で開きます。</p>
         <div class="err" id="auth-err"></div>
         <form id="auth-form">
-          <label for="auth-email">ID</label>
-          <input id="auth-email" type="email" autocomplete="username"
-                 inputmode="email" autocapitalize="none" spellcheck="false" required>
           <label for="auth-pw">パスワード</label>
           <input id="auth-pw" type="password" autocomplete="current-password" required>
           <button type="submit" id="auth-submit">ログイン</button>
@@ -110,11 +107,19 @@
         errBox.style.display = 'none';
         btn.disabled = true;
         btn.textContent = 'ログイン中...';
-        const email = overlay.querySelector('#auth-email').value.trim();
-        const password = overlay.querySelector('#auth-pw').value;
+        const creds = root.AuthGate.buildCredentials(
+          overlay.querySelector('#auth-pw').value
+        );
+        if (!creds) {
+          errBox.textContent = 'パスワードを入力してください。';
+          errBox.style.display = 'block';
+          btn.disabled = false;
+          btn.textContent = 'ログイン';
+          return;
+        }
         let error = null;
         try {
-          const res = await db.auth.signInWithPassword({ email, password });
+          const res = await db.auth.signInWithPassword(creds);
           error = res.error;
         } catch (e) {
           error = e;
