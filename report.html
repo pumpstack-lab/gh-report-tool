@@ -12,6 +12,7 @@
   <script src="scripts/report_guard.js?v=1"></script>
   <script src="scripts/report_patch.js?v=2"></script>
   <script src="scripts/save_retry.js?v=1"></script>
+  <script src="scripts/report_draft.js?v=1"></script>
   <script src="scripts/worktype_rules.js?v=1"></script>
   <script src="scripts/bowel_copy.js?v=1"></script>
   <style>
@@ -556,6 +557,7 @@
   <div class="load-guard-banner" id="load-guard-banner"></div>
   <div class="load-guard-banner" id="top-conflict-banner"></div>
   <div class="load-guard-banner" id="unsaved-banner"></div>
+  <div class="load-guard-banner" id="draft-restore-banner" style="background:#eef7ee;border-color:#2e7d32;color:#1b5e20"></div>
 
   <div class="section date-card-section" id="date-card-section">
     <div class="date-card-inner">
@@ -1816,6 +1818,7 @@
       }
       clearTimeout(saveTimer);
       saveTimer = setTimeout(saveCurrentData, 3000);
+      persistDraft(); // サーバーに届く前に端末へ控える
       refreshUnsavedBanner();
     }
 
@@ -1892,6 +1895,107 @@
     let retryTimer = null;
     let retryForDate = null; // 再送は「失敗した日付」に対してだけ行う（ネイト指摘B-1）
 
+    // ─── 本文の端末退避（2026-09-15）───────────────────────
+    // サーバーに届いていない本文を localStorage に残す。排便記録と同じ方式。
+    function persistDraft() {
+      try {
+        const key = ReportDraft.draftKey(ghNum, dateEl.value);
+        const d = ReportDraft.buildDraft(collectCurrentState(), lastSaved);
+        if (d) localStorage.setItem(key, JSON.stringify(d));
+        else localStorage.removeItem(key);
+      } catch (e) { /* localStorage不可でも本体機能は止めない */ }
+    }
+
+    // D-3: persistDraft は当日キーしか触らないため、開かれなかった日付の下書きは
+    // 期限切れ削除が走らず端末に残り続ける。起動時に全キーを舐めて掃除する。
+    function pruneExpiredDrafts() {
+      try {
+        const now = Date.now();
+        const stale = [];
+        for (let i = 0; i < localStorage.length; i++) {
+          const k = localStorage.key(i);
+          if (!k || k.indexOf(ReportDraft.KEY_PREFIX) !== 0) continue;
+          let d = null;
+          try { d = JSON.parse(localStorage.getItem(k)); } catch (e) { d = null; }
+          if (ReportDraft.isExpired(d, now)) stale.push(k);
+        }
+        stale.forEach(k => localStorage.removeItem(k));
+      } catch (e) { /* localStorage不可でも本体機能は止めない */ }
+    }
+
+    // ログアウト時は端末に本文を残さない（共用iPad前提）
+    function clearAllDrafts() {
+      try {
+        const keys = [];
+        for (let i = 0; i < localStorage.length; i++) {
+          const k = localStorage.key(i);
+          if (k && k.indexOf(ReportDraft.KEY_PREFIX) === 0) keys.push(k);
+        }
+        keys.forEach(k => localStorage.removeItem(k));
+      } catch (e) { /* 無視 */ }
+    }
+
+    function readDraft(dateISO) {
+      try {
+        const raw = localStorage.getItem(ReportDraft.draftKey(ghNum, dateISO));
+        const d = raw ? JSON.parse(raw) : null;
+        if (ReportDraft.isExpired(d, Date.now())) {
+          localStorage.removeItem(ReportDraft.draftKey(ghNum, dateISO));
+          return null;
+        }
+        return d;
+      } catch (e) { return null; }
+    }
+
+    // ロード後、サーバーに無い本文が端末に残っていれば職員に選ばせる。
+    // 勝手に書き戻さない（サーバー側が正しい場合に上書きしてしまうため）。
+    function offerDraftRestore(dateISO, serverResidents) {
+      const restorable = ReportDraft.pickRestorable(readDraft(dateISO), serverResidents || {});
+      const names = Object.keys(restorable);
+      const el = document.getElementById('draft-restore-banner');
+      if (!el) return;
+      if (names.length === 0) { el.classList.remove('is-visible'); return; }
+      const who = names.slice(0, 2).map(labelOf).join('・') + (names.length > 2 ? ` 他${names.length - 2}件` : '');
+      el.innerHTML = '<div style="margin-bottom:6px">💾 ' + escapeHtml(who)
+        + 'の欄に、保存されていない書きかけが端末に残っています</div>'
+        + '<div class="conflict-actions">'
+        + '<button type="button" id="draft-restore-yes" class="btn-conflict-safe">書きかけを復元する</button>'
+        + '<button type="button" id="draft-restore-no" class="btn-conflict-danger">破棄する</button></div>';
+      el.classList.add('is-visible');
+      document.getElementById('draft-restore-yes').addEventListener('click', () => {
+        names.forEach(name => {
+          const el2 = fieldForKey(name);
+          if (!el2) return;
+          el2.value = restorable[name];
+          if (el2.tagName === 'TEXTAREA') autoExpand(el2);
+        });
+        el.classList.remove('is-visible');
+        scheduleAutoSave();
+      });
+      document.getElementById('draft-restore-no').addEventListener('click', () => {
+        try { localStorage.removeItem(ReportDraft.draftKey(ghNum, dateISO)); } catch (e) { /* 無視 */ }
+        el.classList.remove('is-visible');
+      });
+    }
+
+    // residentsキー（利用者名 or 短期入所の内部キー）から、対応する入力欄を返す。
+    function fieldForKey(name) {
+      const entry = Array.from(document.querySelectorAll('.resident-entry'))
+        .find(e => e.dataset.name === name);
+      if (entry) return entry.querySelector('textarea');
+      const ss = Array.from(document.querySelectorAll('.short-stay-entry'))
+        .find(e => e.dataset.shortStayKey === name || `${e.dataset.shortStayKey}name` === name);
+      if (!ss) return null;
+      return name.endsWith('name') ? ss.querySelector('input') : ss.querySelector('textarea');
+    }
+
+    // 短期入所枠は内部キーなので、画面に出す名前を整える。
+    function labelOf(name) {
+      const m = /^__short_stay_(\d+)__(name)?$/.exec(name);
+      if (m) return `短期入所${m[1] === '1' ? '①' : '②'}${m[2] ? 'の氏名' : ''}`;
+      return `${name}さん`;
+    }
+
     function refreshUnsavedBanner() {
       const el = document.getElementById('unsaved-banner');
       if (!el) return;
@@ -1908,9 +2012,8 @@
         el.style.cursor = n.level === 'conflict' ? 'pointer' : '';
         el.onclick = n.level === 'conflict' ? () => {
           const first = Object.keys((pendingConflicts && pendingConflicts.residents) || {})[0];
-          const entry = Array.from(document.querySelectorAll('.resident-entry'))
-            .find(e => e.dataset.name === first);
-          if (entry) entry.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          const target = fieldForKey(first);
+          if (target) target.scrollIntoView({ behavior: 'smooth', block: 'center' });
         } : null;
       } else {
         el.classList.remove('is-visible');
@@ -2123,6 +2226,7 @@
       applyDeferredOrImmediate(result, current);
       failedAttempts = 0;
       clearTimeout(retryTimer);
+      persistDraft(); // 届いた分は退避から消える
       ind.style.color = '';
       ind.textContent = '保存しました ✓';
       refreshUnsavedBanner();
@@ -2218,11 +2322,18 @@
 
     // conflictバナーの描画（設計§3-3b の3: 「自分の内容を使う／相手の内容を使う」2択）
     function renderConflictBanners() {
-      document.querySelectorAll('.resident-entry .conflict-banner').forEach(el => el.remove());
+      document.querySelectorAll('.resident-entry .conflict-banner, .short-stay-entry .conflict-banner')
+        .forEach(el => el.remove());
       const residentConflicts = pendingConflicts.residents || {};
       Object.entries(residentConflicts).forEach(([name, otherValue]) => {
-        const entry = Array.from(document.querySelectorAll('.resident-entry'))
+        let entry = Array.from(document.querySelectorAll('.resident-entry'))
           .find(e => e.dataset.name === name);
+        // 2026-09-15: 短期入所枠は .short-stay-entry にあるため、以前はバナーを出す先が無く
+        // excludePendingConflicts で以後ずっと送信対象から外れ続けていた（＝永久に保存されない）。
+        if (!entry) {
+          entry = Array.from(document.querySelectorAll('.short-stay-entry'))
+            .find(e => e.dataset.shortStayKey === name || `${e.dataset.shortStayKey}name` === name);
+        }
         if (!entry) {
           // 2026-09-15（ネイト指摘C）: 短期入所欄など .resident-entry に対応する行が無いキーは
           // バナーを出す先が無く、excludePendingConflicts で以後ずっと送信から外れ続ける
@@ -2257,14 +2368,14 @@
         // 2026-09-15: 福祉記録で他人の記載を消す選択肢しか無いのは不適切（ネイト指摘）。
         // どちらも失わない「両方残す」を既定の並びの先頭に置く。
         banner.querySelector('.btn-conflict-merge').addEventListener('click', () => {
-          const ta = entry.querySelector('textarea');
+          const ta = fieldForKey(name);
           const mine = ta.value;
           const theirs = otherValueForAdopt;
           const merged = !mine.trim() ? theirs
             : !theirs.trim() ? mine
             : `${theirs}\n${mine}`;
           ta.value = merged;
-          autoExpand(ta);
+          if (ta.tagName === 'TEXTAREA') autoExpand(ta);
           // baseをサーバー現在値に合わせてから、合体した本文を保存し直す
           lastSaved.residents[name] = otherValueForAdopt;
           delete pendingConflicts.residents[name];
@@ -2275,7 +2386,7 @@
         });
         banner.querySelector('.btn-conflict-keep-mine').addEventListener('click', () => {
           // 2026-09-15: 記録が消える操作は取り消せないため確認を挟む
-          if (!confirm(`${name}さんの欄で、他の職員が書いた内容を消して自分の内容にします。よろしいですか？`)) return;
+          if (!confirm(`${labelOf(name)}の欄で、他の職員が書いた内容を消して自分の内容にします。よろしいですか？`)) return;
           // コーディネーター指摘1（ブロッカー）: lastSavedを更新しないまま次の保存をスケジュールすると、
           // buildPatchが同じ古いbaseを送り続け、RPCが永久にconflictを返す無限ループになる。
           // 「相手の内容を見た上で自分の内容で上書きする」の意味になるよう、
@@ -2289,10 +2400,10 @@
         });
         banner.querySelector('.btn-conflict-use-theirs').addEventListener('click', () => {
           // 2026-09-15: 記録が消える操作は取り消せないため確認を挟む
-          if (!confirm(`${name}さんの欄で、自分が書いた内容を消して相手の内容にします。よろしいですか？`)) return;
-          const ta = entry.querySelector('textarea');
+          if (!confirm(`${labelOf(name)}の欄で、自分が書いた内容を消して相手の内容にします。よろしいですか？`)) return;
+          const ta = fieldForKey(name);
           ta.value = otherValueForAdopt;
-          autoExpand(ta);
+          if (ta.tagName === 'TEXTAREA') autoExpand(ta);
           lastSaved.residents[name] = otherValueForAdopt;
           delete pendingConflicts.residents[name];
           if (Object.keys(pendingConflicts.residents).length === 0) delete pendingConflicts.residents;
@@ -2302,7 +2413,7 @@
         // 2026-09-05: entry末尾にappendすると「個人の希望品」より下に出て、
         // どの利用者の競合か視覚的に分からなくなる（Getter本体のスクショ目視で検出）。
         // 該当利用者のtextareaの直後に差し込む。
-        const ta = entry.querySelector('textarea');
+        const ta = fieldForKey(name);
         if (ta && ta.parentNode) {
           ta.parentNode.insertBefore(banner, ta.nextSibling);
         } else {
@@ -2351,7 +2462,8 @@
       reportDirty = false;
       setLoadGuardBanner(null);
       // コーディネーター指摘: 日付を切り替えると前の日付の競合バナーDOMが残ったままになる。
-      document.querySelectorAll('.resident-entry .conflict-banner').forEach(el => el.remove());
+      document.querySelectorAll('.resident-entry .conflict-banner, .short-stay-entry .conflict-banner')
+        .forEach(el => el.remove());
       pendingConflicts = {};
       pendingDeferredReplacements = {};
       setTopLevelConflictBanner(null);
@@ -2436,6 +2548,7 @@
       restoreBowelDrafts(dateISO);
       reportLoadedFor = dateISO;
       reportDirty = false; // ここでDOMはサーバー内容と一致済みなので、ロード中の入力(blocked)は破棄してよい
+      offerDraftRestore(dateISO, (data && data.residents) || {});
       failedAttempts = 0;
       clearTimeout(retryTimer);
       refreshUnsavedBanner();
@@ -2633,6 +2746,7 @@
       reportLoadedFor = null;
       reportDirty = false;
 
+      pruneExpiredDrafts(); // 期限切れの下書きを端末から消す（D-3）
       await initStaffAndHolidays();
       updateHolidayIndicator();
 
@@ -2756,10 +2870,19 @@
       await loadBowelRecords(dateISO);
       restoreBowelDrafts(dateISO);
       reportLoadedFor = dateISO;
+      offerDraftRestore(dateISO, (reportData && reportData.residents) || {});
       setFormInputsDisabled(false);
       setLoadGuardBanner(null);
     }
     bindPhotoInput();
+    // 共用iPad前提。サインアウトしたら端末に本文を残さない（ネイト指摘）。
+    // ログアウト機能は現時点で画面に無いが、セッション失効・別アカウントでの
+    // ログインでもここを通るため、退避の消去はこの1箇所で担保できる。
+    try {
+      db.auth.onAuthStateChange((event) => {
+        if (event === 'SIGNED_OUT' || event === 'USER_UPDATED') clearAllDrafts();
+      });
+    } catch (e) { /* 認証の購読に失敗しても本体機能は止めない */ }
     AuthUI.requireLogin(db).then(() => {
       init();
     });

@@ -333,12 +333,110 @@ def case5_conflict_left_alone_is_visible(pw):
     return shown and named and still and gone
 
 
+def case6_draft_survives_reload(pw):
+    """⑥保存できないまま再読み込みしても、書きかけが端末に残り復元できる。"""
+    print("\n--- ケース⑥: 保存前に再読み込みしても書きかけが残る ---")
+    browser = pw.chromium.launch()
+    ctx = browser.new_context()
+    calls, pending = [], []
+
+    def prep(page):
+        page.on("dialog", lambda d: d.accept())
+        page.add_init_script(
+            "window.localStorage.setItem('sb-vqeoutrlvdydxenaspas-auth-token', "
+            + json.dumps(json.dumps(FAKE_SESSION)) + ");")
+        page.route("**/auth/v1/**", lambda r: r.fulfill(
+            status=200, content_type="application/json", body=json.dumps(FAKE_SESSION)))
+
+        def h(route):
+            u = route.request.url
+            if "rpc/report_save_partial" in u:
+                calls.append(json.loads(route.request.post_data or "null"))
+                route.fulfill(status=500, content_type="application/json",
+                              body=json.dumps({"message": "通信エラー"}))
+                return
+            if "/rest/v1/reports" in u and route.request.method == "GET":
+                route.fulfill(status=200, content_type="application/json", body=json.dumps(EXISTING_REPORT)); return
+            if "/rest/v1/residents" in u:
+                route.fulfill(status=200, content_type="application/json", body=json.dumps(RESIDENTS)); return
+            route.fulfill(status=200, content_type="application/json", body="[]")
+        page.route("**/rest/v1/**", h)
+
+    page = ctx.new_page(); prep(page)
+    page.goto(f"{BASE}/report.html?gh={GH}&date={DATE}", wait_until="domcontentloaded")
+    page.wait_for_selector(".resident-entry textarea", timeout=8000)
+    type_into(page.locator(".resident-entry textarea").first, "サーバーに届かなかった本文")
+    page.wait_for_timeout(4000)
+    record("保存は失敗している", len(calls) >= 1, f"{len(calls)}本")
+
+    stored = page.evaluate("() => localStorage.getItem('report_draft_6_2026-09-05')")
+    record("書きかけが端末に控えられている", bool(stored) and "届かなかった" in (stored or ""), (stored or "")[:50])
+
+    # 同じブラウザ文脈で再読み込み（＝端末のlocalStorageは残る）
+    page2 = ctx.new_page(); prep(page2)
+    page2.goto(f"{BASE}/report.html?gh={GH}&date={DATE}", wait_until="domcontentloaded")
+    page2.wait_for_selector(".resident-entry textarea", timeout=8000)
+    page2.wait_for_timeout(1200)
+
+    offer = page2.locator("#draft-restore-banner")
+    shown = offer.is_visible()
+    record("再読み込み後に復元の案内が出る", shown, offer.inner_text()[:60] if shown else "")
+    if not shown:
+        ctx.close(); browser.close(); return False
+
+    page2.locator("#draft-restore-yes").click()
+    page2.wait_for_timeout(500)
+    restored = page2.locator(".resident-entry textarea").first.input_value()
+    ok = restored == "サーバーに届かなかった本文"
+    record("押すと本文が戻る", ok, restored)
+
+    ctx.close(); browser.close()
+    return bool(stored) and shown and ok
+
+
+def case7_short_stay_conflict_has_picker(pw):
+    """⑦短期入所欄の競合でも選択UIが出る（以前は出せず永久に未保存だった）。"""
+    print("\n--- ケース⑦: 短期入所欄の競合にも選択UIが出る ---")
+    browser = pw.chromium.launch()
+    calls, pending = [], []
+    auto = [
+        {"ok": False, "conflicts": {"residents": ["__short_stay_1__"]},
+         "current": {"residents": {"山田太郎": "既存A", "佐藤花子": "既存B", "__short_stay_1__": "他端末の短期入所本文"},
+                     "reporter": "", "workers": [], "photos": [], "shortage": "[]"}},
+    ]
+    page = open_page(browser, calls, pending, auto)
+    ss = page.locator(".short-stay-entry textarea").first
+    ok_exists = page.locator(".short-stay-entry").count() > 0
+    record("短期入所欄が存在する（マハロ）", ok_exists)
+    if not ok_exists:
+        browser.close(); return False
+
+    type_into(ss, "自分が書いた短期入所本文")
+    page.wait_for_timeout(3600)
+
+    banner = page.locator(".short-stay-entry .conflict-banner")
+    shown = banner.count() == 1
+    record("短期入所欄に選択UIが出る", shown)
+    if not shown:
+        browser.close(); return False
+
+    page.locator(".short-stay-entry .btn-conflict-merge").first.click()
+    page.wait_for_timeout(300)
+    merged = ss.input_value()
+    ok = "他端末の短期入所本文" in merged and "自分が書いた短期入所本文" in merged
+    record("両方残すで双方が残る", ok, merged.replace("\n", " / "))
+
+    browser.close()
+    return shown and ok
+
+
 def main():
     proc = start_server()
     try:
         with sync_playwright() as pw:
             oks = [case1_no_false_conflict(pw), case2_no_revert_during_roundtrip(pw), case3_merge_keeps_both(pw),
-                   case4_retry_and_unsaved_banner(pw), case5_conflict_left_alone_is_visible(pw)]
+                   case4_retry_and_unsaved_banner(pw), case5_conflict_left_alone_is_visible(pw),
+                   case6_draft_survives_reload(pw), case7_short_stay_conflict_has_picker(pw)]
     finally:
         proc.terminate()
 

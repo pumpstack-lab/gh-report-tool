@@ -48,8 +48,8 @@ test('unsavedNotice: 諦めても「再読み込み」は促さない（記録�
   const r = unsavedNotice({ dirty: true, failedAttempts: MAX_ATTEMPTS + 1, pendingConflicts: {}, online: true });
   assert.equal(r.level, 'giveup');
   assert.doesNotMatch(r.message, /再読み込み|リロード/);
-  assert.match(r.message, /閉じずに/);
-  assert.match(r.message, /控え/);
+  assert.match(r.message, /端末に控え/);   // localStorage退避があるので人力backupを求めない
+  assert.doesNotMatch(r.message, /紙/);
 });
 
 test('unsavedNotice: 再試行中の文言に回数を出さない（連続失敗数と一致しないため）', () => {
