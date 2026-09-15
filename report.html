@@ -13,6 +13,7 @@
   <script src="scripts/report_patch.js?v=2"></script>
   <script src="scripts/save_retry.js?v=1"></script>
   <script src="scripts/report_draft.js?v=1"></script>
+  <script src="scripts/banner_stack.js?v=1"></script>
   <script src="scripts/worktype_rules.js?v=1"></script>
   <script src="scripts/bowel_copy.js?v=1"></script>
   <style>
@@ -764,16 +765,44 @@
     let reportDirty = false;    // ロード後にユーザー入力があったか
     refreshDateDisplay();
 
+    // 2026-09-15: 帯は最大2枚。4枚縦に並ぶとスマホで画面上部の1/4を占め、
+    // 現場が読むのをやめる。ただし消えない通知（担当者の消失）を隠すのはもっと悪い
+    // ＝競合時は reportDirty も立つため、未保存を上位に置くと委託料に直結する通知が
+    // ほぼ必ず隠れる（ネイト指摘）。消えない通知は常に出し、残りは1枚だけにする。
+    const bannerState = { sticky: '', loadGuard: '', unsaved: '', draftRestore: '' };
+    const BANNER_EL = {
+      sticky: 'top-conflict-banner',
+      loadGuard: 'load-guard-banner',
+      unsaved: 'unsaved-banner',
+      draftRestore: 'draft-restore-banner',
+    };
+
+    function renderBanners() {
+      const picks = BannerStack.visible(bannerState);
+      const shown = {};
+      picks.forEach(p => { shown[p.key] = p.message; });
+      Object.keys(BANNER_EL).forEach(key => {
+        const el = document.getElementById(BANNER_EL[key]);
+        if (!el) return;
+        if (shown[key] === undefined) { el.classList.remove('is-visible'); return; }
+        // ⚠️ draftRestore だけは message を表示に使わない。中身は offerDraftRestore が
+        // 組んだHTML（復元・破棄の2ボタン）が正本。ここで textContent を入れると
+        // 両ボタンが消え、端末に残った書きかけを復元する手段が永久に失われる。
+        if (key !== 'draftRestore') el.textContent = shown[key];
+        el.classList.add('is-visible');
+      });
+    }
+
+    // 検証スクリプトから帯の状態を直接立てるためのフック（表示判定の確認用）
+    window.__bannerState = bannerState; // 表示だけでなく状態も検証できるようにする
+    window.__setSticky = (m) => { bannerState.sticky = m || ''; renderBanners(); };
+    window.__setUnsaved = (m) => { bannerState.unsaved = m || ''; renderBanners(); };
+    window.__setLoadGuard = (m) => { bannerState.loadGuard = m || ''; renderBanners(); };
+    window.__setDraftRestore = (m) => { bannerState.draftRestore = m || ''; renderBanners(); };
+
     function setLoadGuardBanner(message) {
-      const banner = document.getElementById('load-guard-banner');
-      if (!banner) return;
-      if (message) {
-        banner.textContent = message;
-        banner.classList.add('is-visible');
-      } else {
-        banner.textContent = '';
-        banner.classList.remove('is-visible');
-      }
+      bannerState.loadGuard = message || '';
+      renderBanners();
     }
 
     function setFormInputsDisabled(isDisabled) {
@@ -1954,14 +1983,15 @@
       const names = Object.keys(restorable);
       const el = document.getElementById('draft-restore-banner');
       if (!el) return;
-      if (names.length === 0) { el.classList.remove('is-visible'); return; }
+      if (names.length === 0) { bannerState.draftRestore = ''; renderBanners(); return; }
       const who = names.slice(0, 2).map(labelOf).join('・') + (names.length > 2 ? ` 他${names.length - 2}件` : '');
       el.innerHTML = '<div style="margin-bottom:6px">💾 ' + escapeHtml(who)
         + 'の欄に、保存されていない書きかけが端末に残っています</div>'
         + '<div class="conflict-actions">'
         + '<button type="button" id="draft-restore-yes" class="btn-conflict-safe">書きかけを復元する</button>'
         + '<button type="button" id="draft-restore-no" class="btn-conflict-danger">破棄する</button></div>';
-      el.classList.add('is-visible');
+      bannerState.draftRestore = `書きかけが端末に残っています（${who}）`;
+      renderBanners();
       document.getElementById('draft-restore-yes').addEventListener('click', () => {
         names.forEach(name => {
           const el2 = fieldForKey(name);
@@ -1969,12 +1999,14 @@
           el2.value = restorable[name];
           if (el2.tagName === 'TEXTAREA') autoExpand(el2);
         });
-        el.classList.remove('is-visible');
+        bannerState.draftRestore = '';
+        renderBanners();
         scheduleAutoSave();
       });
       document.getElementById('draft-restore-no').addEventListener('click', () => {
         try { localStorage.removeItem(ReportDraft.draftKey(ghNum, dateISO)); } catch (e) { /* 無視 */ }
-        el.classList.remove('is-visible');
+        bannerState.draftRestore = '';
+        renderBanners();
       });
     }
 
@@ -2005,19 +2037,15 @@
         pendingConflicts,
         online: navigator.onLine !== false,
       });
-      if (n.show) {
-        el.textContent = n.message;
-        el.classList.add('is-visible');
-        // 競合中はどの欄か探しにくい。タップで該当欄へ移動する（ネイト指摘B-7）
-        el.style.cursor = n.level === 'conflict' ? 'pointer' : '';
-        el.onclick = n.level === 'conflict' ? () => {
-          const first = Object.keys((pendingConflicts && pendingConflicts.residents) || {})[0];
-          const target = fieldForKey(first);
-          if (target) target.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        } : null;
-      } else {
-        el.classList.remove('is-visible');
-      }
+      // 競合中はどの欄か探しにくい。タップで該当欄へ移動する（ネイト指摘B-7）
+      el.style.cursor = n.level === 'conflict' ? 'pointer' : '';
+      el.onclick = n.level === 'conflict' ? () => {
+        const first = Object.keys((pendingConflicts && pendingConflicts.residents) || {})[0];
+        const target = fieldForKey(first);
+        if (target) target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      } : null;
+      bannerState.unsaved = n.show ? n.message : '';
+      renderBanners();
     }
 
     function scheduleRetry() {
@@ -2305,19 +2333,16 @@
     }
 
     function setTopLevelConflictBanner(message, opts) {
-      const el = document.getElementById('top-conflict-banner');
-      if (!el) return;
-      if (message) {
-        el.textContent = message;
-        el.classList.add('is-visible');
-        clearTimeout(setTopLevelConflictBanner._timer);
-        // sticky: 担当者の消失など確認が要る通知は自動で消さない（見落とし防止）
-        if (!(opts && opts.sticky)) {
-          setTopLevelConflictBanner._timer = setTimeout(() => el.classList.remove('is-visible'), 5000);
-        }
-      } else {
-        el.classList.remove('is-visible');
+      bannerState.sticky = message || '';
+      clearTimeout(setTopLevelConflictBanner._timer);
+      // sticky指定が無い通知は5秒で消す。sticky（担当者の消失など確認が要るもの）は残す。
+      if (message && !(opts && opts.sticky)) {
+        setTopLevelConflictBanner._timer = setTimeout(() => {
+          bannerState.sticky = '';
+          renderBanners();
+        }, 5000);
       }
+      renderBanners();
     }
 
     // conflictバナーの描画（設計§3-3b の3: 「自分の内容を使う／相手の内容を使う」2択）
@@ -2340,8 +2365,9 @@
           // ＝書いても永久に保存されない。せめて気づけるように上部へ出す。
           const msg = '短期入所など一部の欄が他の職員の入力と競合しました。その欄の内容をコピーしてから画面を再読み込みしてください';
           // 担当者/不足品の警告（委託料に直結）を消さないよう、出ていれば併記する
-          const topEl = document.getElementById('top-conflict-banner');
-          const shown = topEl && topEl.classList.contains('is-visible') ? topEl.textContent : '';
+          // 状態の正本は bannerState。DOMから読み戻すと、表示の絞り込み方を
+          // 変えた瞬間に担当者の警告を無言で消す（ネイト指摘B-1）。
+          const shown = bannerState.sticky;
           setTopLevelConflictBanner(
             shown && shown.indexOf(msg) === -1 ? `${shown} ／ ${msg}` : (shown ? shown : msg),
             { sticky: true });
@@ -2479,6 +2505,8 @@
         setLoadGuardBanner('読み込みに失敗しました。再読み込みしてください（入力は保存されません）');
         failedAttempts = 0;
         clearTimeout(retryTimer);
+        // 前日の復元案内を残すと、押した時に別の日付の欄へ前日の下書きを書き込む
+        bannerState.draftRestore = '';
         refreshUnsavedBanner();
         return;
       }

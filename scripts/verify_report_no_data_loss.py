@@ -430,13 +430,92 @@ def case7_short_stay_conflict_has_picker(pw):
     return shown and ok
 
 
+def case8_sticky_not_hidden_by_unsaved(pw):
+    """⑧未保存が出ていても、担当者の通知（委託料に直結）が隠れない。"""
+    print("\n--- ケース⑧: 消えない通知は未保存に隠されない ---")
+    browser = pw.chromium.launch()
+    calls, pending = [], []
+    page = open_page(browser, calls, pending, [])
+    # 未保存と消えない通知を同時に立てる
+    page.evaluate("""() => {
+        window.__setSticky('担当者／不足品が他の職員に更新されました。担当者欄を確認してください');
+        window.__setUnsaved('⚠️ 未保存の入力があります（保存を再試行中）。画面を閉じないでください');
+    }""")
+    page.wait_for_timeout(300)
+
+    sticky = page.locator("#top-conflict-banner")
+    unsaved = page.locator("#unsaved-banner")
+    ok_sticky = sticky.is_visible()
+    record("担当者の通知が表示される", ok_sticky, sticky.inner_text()[:40] if ok_sticky else "")
+    ok_unsaved = unsaved.is_visible()
+    record("未保存の表示も同時に出る", ok_unsaved)
+
+    shown = page.locator(".load-guard-banner.is-visible").count()
+    ok_two = shown == 2
+    record("同時に出る帯は2枚まで", ok_two, f"{shown}枚")
+
+    # 4つ全部立てても2枚に収まる
+    page.evaluate("""() => {
+        window.__setLoadGuard('読み込み中です');
+        window.__setDraftRestore('書きかけが残っています');
+    }""")
+    page.wait_for_timeout(300)
+    shown4 = page.locator(".load-guard-banner.is-visible").count()
+    ok_max = shown4 == 2
+    record("4つ立てても2枚を超えない", ok_max, f"{shown4}枚")
+    still = page.locator("#top-conflict-banner").is_visible()
+    record("そのときも担当者の通知は残る", still)
+
+    browser.close()
+    return ok_sticky and ok_unsaved and ok_two and ok_max and still
+
+
+def case9_sticky_merged_not_read_from_dom(pw):
+    """⑨担当者の警告が出ている時に短期入所の競合が起きても、両方の文言が残る。
+    状態ではなくDOMから読み戻していると、絞り込み方次第で担当者の警告が消える。"""
+    print("\n--- ケース⑨: 担当者の警告と短期入所の警告が併記される ---")
+    browser = pw.chromium.launch()
+    calls, pending = [], []
+    page = open_page(browser, calls, pending, [])
+
+    # 担当者の警告が出ている状態を作る
+    page.evaluate("() => window.__setSticky('担当者／不足品が他の職員に更新されました。担当者欄を確認してください')")
+    # そのうえで、表示を絞り込む他の帯も立てる（DOM読み戻しだと担当者側が消える条件）
+    page.evaluate("() => { window.__setLoadGuard('読み込み中です'); window.__setUnsaved('未保存の入力があります'); }")
+    page.wait_for_timeout(200)
+
+    # 短期入所の競合が後から起きたときの併記処理を走らせる
+    page.evaluate("""() => {
+        const prev = window.__bannerState.sticky;
+        const msg = '一部の欄が他の職員の入力と競合しました。その欄の内容を控えてから管理者へご連絡ください';
+        window.__setSticky(prev && prev.indexOf(msg) === -1 ? (prev + ' ／ ' + msg) : (prev || msg));
+    }""")
+    page.wait_for_timeout(200)
+
+    state = page.evaluate("() => window.__bannerState.sticky")
+    ok_both = '担当者' in state and '競合しました' in state
+    record("担当者の警告が消えずに併記される", ok_both, state[:80])
+
+    visible_txt = page.locator("#top-conflict-banner").inner_text()
+    ok_shown = '担当者' in visible_txt
+    record("画面にも担当者の警告が出ている", ok_shown, visible_txt[:60])
+
+    shown = page.locator(".load-guard-banner.is-visible").count()
+    ok_two = shown == 2
+    record("帯は2枚に収まっている", ok_two, f"{shown}枚")
+
+    browser.close()
+    return ok_both and ok_shown and ok_two
+
+
 def main():
     proc = start_server()
     try:
         with sync_playwright() as pw:
             oks = [case1_no_false_conflict(pw), case2_no_revert_during_roundtrip(pw), case3_merge_keeps_both(pw),
                    case4_retry_and_unsaved_banner(pw), case5_conflict_left_alone_is_visible(pw),
-                   case6_draft_survives_reload(pw), case7_short_stay_conflict_has_picker(pw)]
+                   case6_draft_survives_reload(pw), case7_short_stay_conflict_has_picker(pw),
+                   case8_sticky_not_hidden_by_unsaved(pw), case9_sticky_merged_not_read_from_dom(pw)]
     finally:
         proc.terminate()
 
