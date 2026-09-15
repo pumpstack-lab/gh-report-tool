@@ -10,7 +10,7 @@
   <script src="scripts/auth_ui.js?v=1"></script>
   <script src="diaper-logic.js?v=2"></script>
   <script src="scripts/report_guard.js?v=1"></script>
-  <script src="scripts/report_patch.js?v=1"></script>
+  <script src="scripts/report_patch.js?v=2"></script>
   <script src="scripts/worktype_rules.js?v=1"></script>
   <script src="scripts/bowel_copy.js?v=1"></script>
   <style>
@@ -117,6 +117,18 @@
       border-color: #4a90d9;
       box-shadow: 0 0 0 3px rgba(74,144,217,0.15);
     }
+
+    /* 競合バナーの選択肢（2026-09-15）。福祉記録なので「消える選択肢」と
+       「消えない選択肢」を色と形の二重で区別し、タップ領域を44px確保する。 */
+    .conflict-actions { display:flex; flex-wrap:wrap; gap:8px; }
+    .conflict-actions button {
+      min-height:44px; padding:10px 14px; border-radius:8px; font-size:14px;
+      cursor:pointer; flex:1 1 auto;
+    }
+    .btn-conflict-safe { background:#2e7d32; color:#fff; border:1.5px solid #2e7d32; font-weight:bold; }
+    .btn-conflict-danger { background:#fff; color:#c0392b; border:1.5px solid #e6a8a2; }
+    .conflict-note { margin:0 0 8px; color:#c0392b; font-size:12px; line-height:1.5; }
+    @media (max-width: 420px) { .conflict-actions button { flex:1 1 100%; } }
 
     .resident-entry {
       margin-bottom: 20px;
@@ -1920,8 +1932,13 @@
           reportDirty = true;
           return;
         }
+        // 2026-09-15: ok=true と current が揃っていない応答は成功扱いにしない。
+        // savedPatchでlastSavedが実際に進むようになったため、壊れた応答を成功と誤認すると
+        // 「保存されていないのに保存済み」の基準ができ、次の保存で他職員の記載を無言上書きする。
+        if (!data || data.ok !== true || !data.current) { reportDirty = true; return; }
         const result = ReportPatch.applyServerState({
-          current, lastSaved, server: (data && data.current) || current, conflicts: {}, activeKey: activeElementKey,
+          current, lastSaved, server: data.current, conflicts: {}, activeKey: activeElementKey,
+          savedPatch: patch, // 離脱時フラッシュも保存成功＝送ったキーのlastSavedを進める
         });
         lastSaved = result.lastSaved;
         return;
@@ -1989,7 +2006,7 @@
           current, lastSaved, server: data.current, conflicts: data.conflicts, activeKey: activeElementKey,
         });
         lastSaved = result.lastSaved;
-        applyDeferredOrImmediate(result);
+        applyDeferredOrImmediate(result, current);
 
         // residents以外（reporter/workers/photos/shortage）のconflictは選択UIを作らない（YAGNI）。
         // その項目だけサーバー値を自動採用してlastSavedを更新する「自動復帰」にする
@@ -2022,12 +2039,21 @@
         return;
       }
 
-      // 成功: 送信したpatchの分だけlastSavedを更新する（サーバーからのcurrentをそのまま採用）
+      // 2026-09-15: ok=true と current が揃っていない応答は成功扱いにしない（上の離脱時と同じ理由）。
+      if (!data || data.ok !== true || !data.current) {
+        ind.style.color = '#e74c3c';
+        ind.textContent = '⚠️ 保存できませんでした。画面を再読み込みしてください';
+        reportDirty = true;
+        return;
+      }
+      // 成功: 送信したpatchに載っていたキーだけlastSavedを進める。
+      // 進めないと同じ欄の2回目以降の保存が必ず偽の競合になる（本番で本文消失13件の主因）。
       const result = ReportPatch.applyServerState({
-        current, lastSaved, server: (data && data.current) || current, conflicts: {}, activeKey: activeElementKey,
+        current, lastSaved, server: data.current, conflicts: {}, activeKey: activeElementKey,
+        savedPatch: patch,
       });
       lastSaved = result.lastSaved;
-      applyDeferredOrImmediate(result);
+      applyDeferredOrImmediate(result, current);
       ind.style.color = '';
       ind.textContent = '保存しました ✓';
       document.getElementById('existing-badge').textContent = '記録あり ✓';
@@ -2054,12 +2080,22 @@
     // applyServerStateが返したcurrent/deferredReplacementsをDOMへ反映する。
     // dirtyでないキーはこの場でtextareaへ書き戻し、入力中のキーはpendingDeferredReplacementsへ積んで
     // フォーカス離脱時（bindActiveKeyTrackingのblur）に反映する（設計§3-3bの4）。
-    function applyDeferredOrImmediate(result) {
+    function applyDeferredOrImmediate(result, sentSnapshot) {
       const nextResidents = (result.current && result.current.residents) || {};
+      // 送信時に画面がどうだったか。往復中に打たれた欄は触らない（ネイト指摘E・2026-09-15）。
+      const snapResidents = (sentSnapshot && sentSnapshot.residents) || null;
+      // 2026-09-15: 書き戻してよいのは「サーバー値で置き換えたキー」だけに限定する。
+      // 以前は result.current の全キーを書き戻していたため、送信時スナップショットが
+      // 往復中に打たれた文字を巻き戻していた（本番で本文消失13件・1回の保存で
+      // 非フォーカスの全欄が同時に巻き戻るため複数名が同時に短くなる事故になっていた）。
+      const replaced = (result.replacedFromServer && result.replacedFromServer.residents) || {};
       document.querySelectorAll('.resident-entry').forEach(entry => {
         const name = entry.dataset.name;
         const ta = entry.querySelector('textarea');
         if (document.activeElement === ta) return; // 4: 入力中は書き換えない
+        if (!replaced[name]) return; // 自分が書いた欄は絶対に触らない
+        // 送信時スナップショットと今の値が違う＝往復中に職員が打っている。書き戻すと消える。
+        if (snapResidents && ta.value !== snapResidents[name]) return;
         if (Object.prototype.hasOwnProperty.call(nextResidents, name) && ta.value !== nextResidents[name]) {
           ta.value = nextResidents[name];
           autoExpand(ta);
@@ -2117,7 +2153,19 @@
       Object.entries(residentConflicts).forEach(([name, otherValue]) => {
         const entry = Array.from(document.querySelectorAll('.resident-entry'))
           .find(e => e.dataset.name === name);
-        if (!entry) return;
+        if (!entry) {
+          // 2026-09-15（ネイト指摘C）: 短期入所欄など .resident-entry に対応する行が無いキーは
+          // バナーを出す先が無く、excludePendingConflicts で以後ずっと送信から外れ続ける
+          // ＝書いても永久に保存されない。せめて気づけるように上部へ出す。
+          const msg = '短期入所など一部の欄が他の職員の入力と競合しました。その欄の内容をコピーしてから画面を再読み込みしてください';
+          // 担当者/不足品の警告（委託料に直結）を消さないよう、出ていれば併記する
+          const topEl = document.getElementById('top-conflict-banner');
+          const shown = topEl && topEl.classList.contains('is-visible') ? topEl.textContent : '';
+          setTopLevelConflictBanner(
+            shown && shown.indexOf(msg) === -1 ? `${shown} ／ ${msg}` : (shown ? shown : msg),
+            { sticky: true });
+          return;
+        }
         // コーディネーター指摘2: サーバー側で該当キーが消えている場合 otherValue が undefined になり、
         // 文字列"undefined"がそのまま表示されるバグの修正。
         const hasOtherValue = otherValue !== undefined && otherValue !== null;
@@ -2129,10 +2177,34 @@
         banner.innerHTML = `
           <div style="font-weight:bold;color:#c0392b;margin-bottom:6px">⚠️ 他の職員が別の内容を保存しました</div>
           <div style="white-space:pre-wrap;background:#fff;padding:6px;border-radius:4px;margin-bottom:8px">${otherDisplay}</div>
-          <button type="button" class="btn-conflict-keep-mine" style="margin-right:8px">自分の内容を使う</button>
-          <button type="button" class="btn-conflict-use-theirs">相手の内容を使う</button>
+          <p class="conflict-note">下の2つは、どちらか一方の記録が消えます。迷ったら「両方残す」を押してください。</p>
+          <div class="conflict-actions">
+            <button type="button" class="btn-conflict-merge btn-conflict-safe">✓ 両方残す</button>
+            <button type="button" class="btn-conflict-keep-mine btn-conflict-danger">⚠️ 自分の内容を使う</button>
+            <button type="button" class="btn-conflict-use-theirs btn-conflict-danger">⚠️ 相手の内容を使う</button>
+          </div>
         `;
+        // 2026-09-15: 福祉記録で他人の記載を消す選択肢しか無いのは不適切（ネイト指摘）。
+        // どちらも失わない「両方残す」を既定の並びの先頭に置く。
+        banner.querySelector('.btn-conflict-merge').addEventListener('click', () => {
+          const ta = entry.querySelector('textarea');
+          const mine = ta.value;
+          const theirs = otherValueForAdopt;
+          const merged = !mine.trim() ? theirs
+            : !theirs.trim() ? mine
+            : `${theirs}\n${mine}`;
+          ta.value = merged;
+          autoExpand(ta);
+          // baseをサーバー現在値に合わせてから、合体した本文を保存し直す
+          lastSaved.residents[name] = otherValueForAdopt;
+          delete pendingConflicts.residents[name];
+          if (Object.keys(pendingConflicts.residents).length === 0) delete pendingConflicts.residents;
+          banner.remove();
+          scheduleAutoSave();
+        });
         banner.querySelector('.btn-conflict-keep-mine').addEventListener('click', () => {
+          // 2026-09-15: 記録が消える操作は取り消せないため確認を挟む
+          if (!confirm(`${name}さんの欄で、他の職員が書いた内容を消して自分の内容にします。よろしいですか？`)) return;
           // コーディネーター指摘1（ブロッカー）: lastSavedを更新しないまま次の保存をスケジュールすると、
           // buildPatchが同じ古いbaseを送り続け、RPCが永久にconflictを返す無限ループになる。
           // 「相手の内容を見た上で自分の内容で上書きする」の意味になるよう、
@@ -2144,6 +2216,8 @@
           scheduleAutoSave(); // 自分の内容で改めて保存を試みる（新しいbaseで送るため次回は通る）
         });
         banner.querySelector('.btn-conflict-use-theirs').addEventListener('click', () => {
+          // 2026-09-15: 記録が消える操作は取り消せないため確認を挟む
+          if (!confirm(`${name}さんの欄で、自分が書いた内容を消して相手の内容にします。よろしいですか？`)) return;
           const ta = entry.querySelector('textarea');
           ta.value = otherValueForAdopt;
           autoExpand(ta);
@@ -2178,6 +2252,14 @@
     // 3-3b の4: activeElementKeyの追跡（focus/blurで更新）。textarea値の書き換え遅延に使う。
     function bindActiveKeyTracking(el, key) {
       el.addEventListener('focus', () => { activeElementKey = key; });
+      // 2026-09-15: 職員がその欄に打ち始めたら、保留中の置換は破棄する。
+      // 破棄しないと、フォーカスを外した瞬間に古いサーバー値で上書きされ、
+      // 打った本文がまるごと消える。
+      el.addEventListener('input', () => {
+        const [topKey, subKey] = key.split('.');
+        const deferred = pendingDeferredReplacements;
+        if (deferred && deferred[topKey] && subKey) delete deferred[topKey][subKey];
+      });
       el.addEventListener('blur', () => {
         if (activeElementKey === key) activeElementKey = null;
         // フォーカス離脱時に保留していた置換を適用する

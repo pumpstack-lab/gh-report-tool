@@ -126,3 +126,94 @@ test('applyServerState: activeKeyがdocument.activeElementに対応するキー�
   // 保留リストに次のフォーカス離脱時に適用すべき値を残す
   assert.deepEqual(result.deferredReplacements, { residents: { '山田太郎': '他端末の新本文' } });
 });
+
+// ─── 2026-09-15 本文消失バグの回帰テスト ──────────────────────
+// 本番 reports_history 実測で13件の消失を確認（EMPTIED 5 / SHRUNK 8）。
+// 原因は「保存成功パスでも applyServerState を“取り込み”の意味で呼んでいた」こと。
+// 保存成功時は、送った内容がDBに入った＝lastSavedを進めなければならない。
+
+test('applyServerState: saved=trueなら保存したキーのlastSavedをサーバー値へ進める', () => {
+  const state = {
+    current: { residents: { '山田太郎': '本文その1' } },
+    lastSaved: { residents: {} },
+    server: { residents: { '山田太郎': '本文その1' } },
+    conflicts: {},
+    activeKey: null,
+    savedPatch: { residents: { '山田太郎': '本文その1' } },
+  };
+  const result = applyServerState(state);
+  assert.equal(result.lastSaved.residents['山田太郎'], '本文その1');
+});
+
+test('保存成功→書き足し→2回目のbaseがサーバー現在値と一致する（偽の競合を出さない）', () => {
+  const empty = { residents: {}, reporter: '', workers: [], photos: [], shortage: '[]' };
+  const cur1 = { residents: { '山田太郎': '本文その1' }, reporter: '', workers: [], photos: [], shortage: '[]' };
+  const p1 = buildPatch(empty, cur1);
+  assert.deepEqual(p1.patch, { residents: { '山田太郎': '本文その1' } });
+
+  const server1 = { residents: { '山田太郎': '本文その1' }, reporter: '', workers: [], photos: [], shortage: '[]' };
+  const lastSaved2 = applyServerState({
+    current: cur1, lastSaved: empty, server: server1, conflicts: {}, activeKey: null, savedPatch: p1.patch,
+  }).lastSaved;
+
+  const cur2 = { residents: { '山田太郎': '本文その1本文その2' }, reporter: '', workers: [], photos: [], shortage: '[]' };
+  const p2 = buildPatch(lastSaved2, cur2);
+  // baseがサーバー現在値と一致しないとSQL側のCASが競合を返す（＝偽の競合バナー）
+  assert.equal(p2.base.residents['山田太郎'], '本文その1');
+});
+
+test('applyServerState: 往復中に打たれたdirtyなキーはreplacedFromServerに入らない（textareaを巻き戻さない）', () => {
+  const state = {
+    current: { residents: { '書きかけの人': '送信時点の本文', '触っていない人': '既存本文' } },
+    lastSaved: { residents: { '書きかけの人': '', '触っていない人': '既存本文' } },
+    server: { residents: { '書きかけの人': '送信時点の本文', '触っていない人': '他端末の新本文' } },
+    conflicts: {},
+    activeKey: null,
+    savedPatch: { residents: { '書きかけの人': '送信時点の本文' } },
+  };
+  const result = applyServerState(state);
+  const replaced = (result.replacedFromServer && result.replacedFromServer.residents) || {};
+  // 送信中に職員が書き足している可能性がある欄はDOMへ書き戻してはいけない
+  assert.equal(replaced['書きかけの人'], undefined);
+  // 自分が触っていない欄は他端末の内容を取り込んでよい
+  assert.equal(replaced['触っていない人'], true);
+});
+
+test('applyServerState: savedPatchに載っていないキーのlastSavedは進めない（無言上書きの防止）', () => {
+  const state = {
+    current: { residents: { '送った人': '自分の本文', '送っていない人': '画面の古い本文' } },
+    lastSaved: { residents: { '送った人': '', '送っていない人': '画面の古い本文' } },
+    server: { residents: { '送った人': '自分の本文', '送っていない人': '他端末が書いた新本文' } },
+    conflicts: {},
+    activeKey: 'residents.送っていない人', // 入力中＝DOMは書き換わらない
+    savedPatch: { residents: { '送った人': '自分の本文' } },
+  };
+  const result = applyServerState(state);
+  assert.equal(result.lastSaved.residents['送った人'], '自分の本文');
+  // 送っていないキーのlastSavedを進めると、次の保存でCASが通り他職員の記載が無言で消える
+  assert.equal(result.lastSaved.residents['送っていない人'], '画面の古い本文');
+});
+
+test('applyServerState: サーバーに値が無いキーはreplacedFromServerに入れない（textareaに"undefined"を入れない）', () => {
+  const result = applyServerState({
+    current: { residents: { '未記入の人': '' } },
+    lastSaved: { residents: { '未記入の人': '' } },
+    server: { residents: {} },
+    conflicts: {},
+    activeKey: null,
+  });
+  const replaced = (result.replacedFromServer && result.replacedFromServer.residents) || {};
+  assert.equal(replaced['未記入の人'], undefined);
+});
+
+test('applyServerState: savedPatch未指定（取り込み目的）のときは従来どおりlastSavedを進めない', () => {
+  const state = {
+    current: { residents: { '山田太郎': 'ローカルで入力中の本文' } },
+    lastSaved: { residents: { '山田太郎': '旧本文' } },
+    server: { residents: { '山田太郎': '旧本文' } },
+    conflicts: {},
+    activeKey: null,
+  };
+  const result = applyServerState(state);
+  assert.equal(result.lastSaved.residents['山田太郎'], '旧本文');
+});

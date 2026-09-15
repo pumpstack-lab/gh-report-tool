@@ -86,14 +86,21 @@
    * @param {Object} state.conflicts - {residents:['山田太郎'], reporter:true, ...} 形式。無ければ{}
    * @param {string|null} state.activeKey - 入力中のtextarea等に対応するキー。
    *   residentsは "residents.<利用者名>"、それ以外は "reporter"/"workers"/"photos"/"shortage"
-   * @returns {{current: Object, lastSaved: Object, pendingConflicts: Object, deferredReplacements: Object}}
+   * @param {Object} [state.savedPatch] - 保存が成功した直後なら、そのとき送った patch。
+   *   載っていたキーだけ lastSaved をサーバー現在値へ進める（送っていないキーは進めない）。
+   *   サーバーの内容を取り込むだけの呼び出し（競合時・再読込）では省略する。
+   * @returns {{current: Object, lastSaved: Object, pendingConflicts: Object, deferredReplacements: Object, replacedFromServer: Object}}
+   *   replacedFromServer: サーバー値で置き換えたキーだけが入る。DOMへ書き戻してよいのはこれだけ。
    */
   function applyServerState(state) {
-    const { current, lastSaved, server, conflicts, activeKey } = state;
+    const { current, lastSaved, server, conflicts, activeKey, savedPatch } = state;
     const nextCurrent = JSON.parse(JSON.stringify(current || {}));
     const nextLastSaved = JSON.parse(JSON.stringify(lastSaved || {}));
     const pendingConflicts = {};
     const deferredReplacements = {};
+    // どのキーを「サーバー値で置き換えた」かを呼び出し元へ返す。
+    // DOM（textarea）へ書き戻してよいのはここに入ったキーだけ（2026-09-15）。
+    const replacedFromServer = {};
 
     function isConflicted(topKey, subKey) {
       const c = (conflicts || {})[topKey];
@@ -104,8 +111,16 @@
 
     function isDirty(topKey, subKey) {
       const cur = subKey === null ? current[topKey] : (current[topKey] || {})[subKey];
-      const saved = subKey === null ? (lastSaved || {})[topKey] : ((lastSaved || {})[topKey] || {})[subKey];
-      return !deepEqual(cur, saved);
+      const savedVal = subKey === null ? (lastSaved || {})[topKey] : ((lastSaved || {})[topKey] || {})[subKey];
+      return !deepEqual(cur, savedVal);
+    }
+
+    // このキーを今回の保存で実際に送ったか（savedPatchに載っていたか）。
+    function wasSent(topKey, subKey) {
+      if (!savedPatch) return false;
+      if (subKey === null) return Object.prototype.hasOwnProperty.call(savedPatch, topKey);
+      const sub = savedPatch[topKey];
+      return !!sub && Object.prototype.hasOwnProperty.call(sub, subKey);
     }
 
     function setValue(obj, topKey, subKey, value) {
@@ -120,6 +135,16 @@
       const dirty = isDirty(topKey, subKey);
       const conflicted = isConflicted(topKey, subKey);
 
+      // savedPatch（保存が成功した直後に送ったpatch）に載っていたキーは、その内容がDBに入った状態。
+      // 次のCASのbaseになる lastSaved をサーバーの現在値へ進める。
+      // これを怠ると2回目以降の保存が「他の職員が別の内容を保存しました」と
+      // 誤判定され続け、現場が競合バナーで本文を消し合う事故になる
+      // （2026-09-15 本番 reports_history で本文消失13件を実測）。
+      //
+      // ⚠️ 送っていないキーまで進めてはいけない（ネイト指摘B・2026-09-15）。
+      // 進めると、画面が古いまま次の保存でCASが通り、他職員の記載がバナー無しで消える。
+      if (wasSent(topKey, subKey)) setValue(nextLastSaved, topKey, subKey, serverVal);
+
       if (!dirty) {
         // 1. dirtyでないキー: サーバー値で置き換え、lastSavedも更新する
         if (key === activeKey) {
@@ -129,6 +154,8 @@
         }
         setValue(nextCurrent, topKey, subKey, serverVal);
         setValue(nextLastSaved, topKey, subKey, serverVal);
+        // サーバーに値が無いキーはDOMへ書き戻さない（textareaに"undefined"が入るのを防ぐ）
+        if (serverVal !== undefined) setValue(replacedFromServer, topKey, subKey, true);
         return;
       }
       if (dirty && !conflicted) {
@@ -147,7 +174,7 @@
     residentNames.forEach((name) => process('residents', name));
     TOP_LEVEL_KEYS.filter((k) => k !== 'residents').forEach((k) => process(k, null));
 
-    return { current: nextCurrent, lastSaved: nextLastSaved, pendingConflicts, deferredReplacements };
+    return { current: nextCurrent, lastSaved: nextLastSaved, pendingConflicts, deferredReplacements, replacedFromServer };
   }
 
   return { buildPatch, applyServerState };

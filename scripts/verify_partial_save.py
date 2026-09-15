@@ -41,6 +41,16 @@ EXISTING_REPORT = {
     "updated_at": "2026-09-05T00:00:00.000000+00:00",
 }
 
+# 2026-09-09にログイン画面が入ったため、セッションを先に置かないと本文欄まで到達しない。
+FAKE_SESSION = {
+    "access_token": "fake-token",
+    "token_type": "bearer",
+    "expires_in": 3600,
+    "expires_at": int(time.time()) + 3600,
+    "refresh_token": "fake-refresh",
+    "user": {"id": "11111111-1111-1111-1111-111111111111", "email": "staff@example.com"},
+}
+
 results = []
 
 
@@ -106,8 +116,16 @@ def setup_routes(page, *, rpc_responses=None, rpc_calls=None, report_row=None, s
     return rpc_calls
 
 
-def new_page(browser):
-    return browser.new_page()
+def new_page(browser, **kwargs):
+    page = browser.new_page(**kwargs)
+    page.on("dialog", lambda d: d.accept())  # 競合の破壊的操作はconfirmを挟む
+    page.add_init_script(
+        "window.localStorage.setItem('sb-vqeoutrlvdydxenaspas-auth-token', "
+        + json.dumps(json.dumps(FAKE_SESSION)) + ");"
+    )
+    page.route("**/auth/v1/**", lambda r: r.fulfill(
+        status=200, content_type="application/json", body=json.dumps(FAKE_SESSION)))
+    return page
 
 
 def case1_two_tabs_different_residents_both_survive(pw):
@@ -413,7 +431,7 @@ def screenshot_widths(pw):
     print("\n--- スクリーンショット（3幅） ---")
     browser = pw.chromium.launch()
     for width, name in [(375, "sp"), (768, "tablet"), (1280, "pc")]:
-        page = browser.new_page(viewport={"width": width, "height": 900})
+        page = new_page(browser, viewport={"width": width, "height": 900})
         setup_routes(page, report_row=EXISTING_REPORT, rpc_responses=[
             {"ok": False, "conflicts": {"residents": ["山田太郎"]},
              "current": {"residents": {"山田太郎": "他端末が書いた本文"}}}
