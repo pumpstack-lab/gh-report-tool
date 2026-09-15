@@ -4,7 +4,9 @@ report.html 本文消失バグの検証（2026-09-15）。本番Supabase・本�
 python3 -m http.server でローカル配信し、REST/RPC応答を全てモックする。
 
 背景（本番 reports_history 実測・9/4〜9/15）:
-  本文の消失/大幅短縮を13件検出（EMPTIED 5件・SHRUNK 8件）。原因は2つ。
+  本文の消失/大幅短縮の候補を13件検出したが、うち多くは推敲による短縮で、
+  9/15 3-2ホームの当日分には消失が無かったことを後に実測で確認している。
+  それでも下記2点はコードの欠陥として実在したため修正した。
   ① 保存成功パスでも applyServerState を「取り込み」の意味で呼んでいたため
      lastSaved が永久に進まず、同じ欄の2回目以降の保存が必ず偽の競合になっていた。
   ② applyDeferredOrImmediate が result.current の全キーを textarea へ書き戻していたため、
@@ -245,11 +247,98 @@ def case3_merge_keeps_both(pw):
     return ok_merged and ok_sent and ok_payload and ok_base
 
 
+def case4_retry_and_unsaved_banner(pw):
+    """④保存に失敗したら自動で送り直し、未保存の表示が消えない。"""
+    print("\n--- ケース④: 保存失敗→自動再送＋未保存の消えない表示 ---")
+    browser = pw.chromium.launch()
+    calls, pending = [], []
+    page = open_page(browser, calls, pending, [])
+    ta = page.locator(".resident-entry textarea").first
+
+    # 最初の保存を500で失敗させる
+    fail_then_ok = {"n": 0}
+
+    def handle(route):
+        if "/rest/v1/rpc/report_save_partial" in route.request.url:
+            calls.append(json.loads(route.request.post_data or "null"))
+            fail_then_ok["n"] += 1
+            if fail_then_ok["n"] == 1:
+                route.fulfill(status=500, content_type="application/json",
+                              body=json.dumps({"message": "通信エラー"}))
+            else:
+                route.fulfill(status=200, content_type="application/json", body=json.dumps(
+                    {"ok": True, "current": {"residents": {"山田太郎": "失敗しても届く本文", "佐藤花子": "既存B"},
+                                             "reporter": "", "workers": [], "photos": [], "shortage": "[]"}}))
+            return
+        route.fulfill(status=200, content_type="application/json", body="[]")
+
+    page.route("**/rest/v1/**", handle)
+    type_into(ta, "失敗しても届く本文")
+    page.wait_for_timeout(3600)
+
+    ok_failed = len(calls) == 1
+    record("1回目の保存が失敗として記録される", ok_failed, f"呼び出し {len(calls)}本")
+
+    banner = page.locator("#unsaved-banner")
+    shown = banner.is_visible() and "未保存" in banner.inner_text()
+    record("未保存の表示が出る", shown, banner.inner_text()[:60])
+
+    # 自動再送（1回目の待ちは5秒）
+    page.wait_for_timeout(7000)
+    ok_retry = len(calls) >= 2
+    record("入力しなくても自動で送り直す", ok_retry, f"呼び出し {len(calls)}本")
+
+    page.wait_for_timeout(500)
+    gone = not page.locator("#unsaved-banner").is_visible()
+    record("保存できたら未保存の表示が消える", gone)
+
+    browser.close()
+    return ok_failed and shown and ok_retry and gone
+
+
+def case5_conflict_left_alone_is_visible(pw):
+    """⑤競合を放置している間、その欄が保存されないことが画面に出続ける（本番3-2の事故）。"""
+    print("\n--- ケース⑤: 競合放置中は「保存されません」が出続ける ---")
+    browser = pw.chromium.launch()
+    calls, pending = [], []
+    auto = [
+        {"ok": False, "conflicts": {"residents": ["山田太郎"]},
+         "current": {"residents": {"山田太郎": "他端末の本文", "佐藤花子": "既存B"},
+                     "reporter": "", "workers": [], "photos": [], "shortage": "[]"}},
+    ]
+    page = open_page(browser, calls, pending, auto)
+    ta = page.locator(".resident-entry textarea").first
+    type_into(ta, "自分の本文")
+    page.wait_for_timeout(3600)
+
+    b = page.locator("#unsaved-banner")
+    shown = b.is_visible()
+    txt = b.inner_text() if shown else ""
+    record("競合中は未保存の表示が出る", shown, txt[:70])
+    named = "山田太郎" in txt
+    record("どの利用者の欄かが名前で分かる", named)
+
+    # 放置したまま10秒経っても消えない
+    page.wait_for_timeout(10000)
+    still = page.locator("#unsaved-banner").is_visible()
+    record("放置しても表示が消えない", still)
+
+    # 「両方残す」で解消すると消える
+    page.locator(".btn-conflict-merge").first.click()
+    page.wait_for_timeout(500)
+    gone = not page.locator("#unsaved-banner").is_visible()
+    record("解消したら表示が消える", gone)
+
+    browser.close()
+    return shown and named and still and gone
+
+
 def main():
     proc = start_server()
     try:
         with sync_playwright() as pw:
-            oks = [case1_no_false_conflict(pw), case2_no_revert_during_roundtrip(pw), case3_merge_keeps_both(pw)]
+            oks = [case1_no_false_conflict(pw), case2_no_revert_during_roundtrip(pw), case3_merge_keeps_both(pw),
+                   case4_retry_and_unsaved_banner(pw), case5_conflict_left_alone_is_visible(pw)]
     finally:
         proc.terminate()
 

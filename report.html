@@ -11,6 +11,7 @@
   <script src="diaper-logic.js?v=2"></script>
   <script src="scripts/report_guard.js?v=1"></script>
   <script src="scripts/report_patch.js?v=2"></script>
+  <script src="scripts/save_retry.js?v=1"></script>
   <script src="scripts/worktype_rules.js?v=1"></script>
   <script src="scripts/bowel_copy.js?v=1"></script>
   <style>
@@ -554,6 +555,7 @@
 
   <div class="load-guard-banner" id="load-guard-banner"></div>
   <div class="load-guard-banner" id="top-conflict-banner"></div>
+  <div class="load-guard-banner" id="unsaved-banner"></div>
 
   <div class="section date-card-section" id="date-card-section">
     <div class="date-card-inner">
@@ -1806,10 +1808,15 @@
       if (!ReportGuard.canSaveReport({ loadedFor: reportLoadedFor, dateISO: dateEl.value, dirty: reportDirty })) {
         // ロード未完了/失敗の日付に入力があった。偽の「保存しました」を出さず、保存もしない。
         setLoadGuardBanner('読み込み中です。表示が終わってから入力してください');
+        // ロード未完了で保存を止めた。この時点では未保存表示は出ない条件だが、
+        // 状態が変わった時に正しく消えるよう更新しておく（ネイト指摘B-4）。
+        // 職員向けの案内は上の load-guard-banner が担う。
+        refreshUnsavedBanner();
         return;
       }
       clearTimeout(saveTimer);
       saveTimer = setTimeout(saveCurrentData, 3000);
+      refreshUnsavedBanner();
     }
 
     async function saveCurrentData() {
@@ -1878,6 +1885,59 @@
       return db.rpc('report_save_partial', body);
     }
 
+    // 2026-09-15: 保存の再送と「未保存あり」の消えない表示。
+    // 通信が切れたまま画面を閉じると未保存分が消える経路への予防措置。
+    // （当初「本番3-2で記録が失われた」と書いたが、実測の結果その事故は無かった。撤回済み）
+    let failedAttempts = 0;
+    let retryTimer = null;
+    let retryForDate = null; // 再送は「失敗した日付」に対してだけ行う（ネイト指摘B-1）
+
+    function refreshUnsavedBanner() {
+      const el = document.getElementById('unsaved-banner');
+      if (!el) return;
+      const n = SaveRetry.unsavedNotice({
+        dirty: reportDirty,
+        failedAttempts,
+        pendingConflicts,
+        online: navigator.onLine !== false,
+      });
+      if (n.show) {
+        el.textContent = n.message;
+        el.classList.add('is-visible');
+        // 競合中はどの欄か探しにくい。タップで該当欄へ移動する（ネイト指摘B-7）
+        el.style.cursor = n.level === 'conflict' ? 'pointer' : '';
+        el.onclick = n.level === 'conflict' ? () => {
+          const first = Object.keys((pendingConflicts && pendingConflicts.residents) || {})[0];
+          const entry = Array.from(document.querySelectorAll('.resident-entry'))
+            .find(e => e.dataset.name === first);
+          if (entry) entry.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        } : null;
+      } else {
+        el.classList.remove('is-visible');
+      }
+    }
+
+    function scheduleRetry() {
+      const delay = SaveRetry.nextRetryDelay(failedAttempts);
+      refreshUnsavedBanner();
+      if (delay === null) return; // 諦めた。表示は出したまま残す
+      clearTimeout(retryTimer);
+      retryForDate = dateEl.value;
+      retryTimer = setTimeout(() => {
+        // 日付を切り替えていたら、その保存は別の日付のものなので捨てる
+        if (retryForDate !== dateEl.value) return;
+        if (!reportDirty) return;
+        saveCurrentData();
+      }, delay);
+    }
+
+    // 通信が戻ったら待たずに送り直す
+    window.addEventListener('online', () => {
+      refreshUnsavedBanner();
+      if (reportDirty) { clearTimeout(retryTimer); saveCurrentData(); }
+    });
+    window.addEventListener('offline', refreshUnsavedBanner);
+
     let saveInFlight = false; // コーディネーター指摘: 送信中に再送が重なると自己競合するため同時に1本だけにする
 
     async function saveCurrentDataForDate(dateISO, opts) {
@@ -1920,7 +1980,7 @@
         // RPCが間に合わず本文が失われる恐れがある。オムツはkeepalive fetchで
         // fire-and-forgeし、RPCの送信・完了を優先する。
         flushDiaperUsageKeepalive(dateISO);
-        if (Object.keys(patch).length === 0) { reportDirty = false; return; }
+        if (Object.keys(patch).length === 0) { reportDirty = false; refreshUnsavedBanner(); return; }
         reportDirty = false;
         const { data, error } = await callSavePartial(dateISO, patch, base, opts);
         if (error) { reportDirty = true; return; }
@@ -1995,8 +2055,11 @@
       if (saveFailure) {
         ind.style.color = '#e74c3c';
         ind.textContent = '⚠️ 保存失敗: ' + saveFailure.message;
-        reportDirty = true; // 失敗分を次の自動保存で再送できるようにする
+        reportDirty = true;
         setTimeout(() => ind.textContent = '', 3000);
+        // 2026-09-15: 次の入力を待たずに自動で送り直す。表示は消さずに残す。
+        failedAttempts += 1;
+        scheduleRetry();
         return;
       }
 
@@ -2030,6 +2093,7 @@
           delete pendingConflicts.residents;
         }
         renderConflictBanners();
+        refreshUnsavedBanner();
         ind.style.color = '#e74c3c';
         ind.textContent = pendingConflicts.residents
           ? '⚠️ 他の職員の入力と競合しました。下の選択欄から選んでください'
@@ -2042,20 +2106,26 @@
       // 2026-09-15: ok=true と current が揃っていない応答は成功扱いにしない（上の離脱時と同じ理由）。
       if (!data || data.ok !== true || !data.current) {
         ind.style.color = '#e74c3c';
-        ind.textContent = '⚠️ 保存できませんでした。画面を再読み込みしてください';
+        // 再読み込みを促すと未保存の本文が消える。促さない（ネイト指摘B-5）。
+        ind.textContent = '⚠️ 保存できませんでした。画面を閉じずにこのままお待ちください';
         reportDirty = true;
+        failedAttempts += 1;
+        scheduleRetry();
         return;
       }
       // 成功: 送信したpatchに載っていたキーだけlastSavedを進める。
-      // 進めないと同じ欄の2回目以降の保存が必ず偽の競合になる（本番で本文消失13件の主因）。
+      // 進めないと同じ欄の2回目以降の保存が必ず偽の競合になる（2026-09-15実測）。
       const result = ReportPatch.applyServerState({
         current, lastSaved, server: data.current, conflicts: {}, activeKey: activeElementKey,
         savedPatch: patch,
       });
       lastSaved = result.lastSaved;
       applyDeferredOrImmediate(result, current);
+      failedAttempts = 0;
+      clearTimeout(retryTimer);
       ind.style.color = '';
       ind.textContent = '保存しました ✓';
+      refreshUnsavedBanner();
       document.getElementById('existing-badge').textContent = '記録あり ✓';
       setTimeout(() => ind.textContent = '', 3000);
     }
@@ -2086,8 +2156,8 @@
       const snapResidents = (sentSnapshot && sentSnapshot.residents) || null;
       // 2026-09-15: 書き戻してよいのは「サーバー値で置き換えたキー」だけに限定する。
       // 以前は result.current の全キーを書き戻していたため、送信時スナップショットが
-      // 往復中に打たれた文字を巻き戻していた（本番で本文消失13件・1回の保存で
-      // 非フォーカスの全欄が同時に巻き戻るため複数名が同時に短くなる事故になっていた）。
+      // 往復中に打たれた文字を巻き戻していた（1回の保存で非フォーカスの全欄が同時に
+      // 巻き戻るため、複数名分がまとめて短くなりうる）。
       const replaced = (result.replacedFromServer && result.replacedFromServer.residents) || {};
       document.querySelectorAll('.resident-entry').forEach(entry => {
         const name = entry.dataset.name;
@@ -2200,6 +2270,7 @@
           delete pendingConflicts.residents[name];
           if (Object.keys(pendingConflicts.residents).length === 0) delete pendingConflicts.residents;
           banner.remove();
+          refreshUnsavedBanner();
           scheduleAutoSave();
         });
         banner.querySelector('.btn-conflict-keep-mine').addEventListener('click', () => {
@@ -2213,6 +2284,7 @@
           delete pendingConflicts.residents[name];
           if (Object.keys(pendingConflicts.residents).length === 0) delete pendingConflicts.residents;
           banner.remove();
+          refreshUnsavedBanner(); // 解消したら未保存表示も消す（ネイト指摘B-8）
           scheduleAutoSave(); // 自分の内容で改めて保存を試みる（新しいbaseで送るため次回は通る）
         });
         banner.querySelector('.btn-conflict-use-theirs').addEventListener('click', () => {
@@ -2225,6 +2297,7 @@
           delete pendingConflicts.residents[name];
           if (Object.keys(pendingConflicts.residents).length === 0) delete pendingConflicts.residents;
           banner.remove();
+          refreshUnsavedBanner();
         });
         // 2026-09-05: entry末尾にappendすると「個人の希望品」より下に出て、
         // どの利用者の競合か視覚的に分からなくなる（Getter本体のスクショ目視で検出）。
@@ -2292,6 +2365,9 @@
         console.error('reports load failed:', error.message);
         setFormInputsDisabled(true);
         setLoadGuardBanner('読み込みに失敗しました。再読み込みしてください（入力は保存されません）');
+        failedAttempts = 0;
+        clearTimeout(retryTimer);
+        refreshUnsavedBanner();
         return;
       }
 
@@ -2360,6 +2436,9 @@
       restoreBowelDrafts(dateISO);
       reportLoadedFor = dateISO;
       reportDirty = false; // ここでDOMはサーバー内容と一致済みなので、ロード中の入力(blocked)は破棄してよい
+      failedAttempts = 0;
+      clearTimeout(retryTimer);
+      refreshUnsavedBanner();
       setFormInputsDisabled(false);
       setLoadGuardBanner(null);
     }
