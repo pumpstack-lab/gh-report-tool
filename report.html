@@ -8,8 +8,8 @@
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="scripts/auth_gate.js?v=1"></script>
   <script src="scripts/auth_ui.js?v=1"></script>
-  <script src="diaper-logic.js?v=2"></script>
-  <script src="scripts/diaper_stock_label.js?v=1"></script>
+  <script src="diaper-logic.js?v=3"></script>
+  <script src="scripts/diaper_stock_label.js?v=2"></script>
   <script src="scripts/report_guard.js?v=1"></script>
   <script src="scripts/report_patch.js?v=2"></script>
   <script src="scripts/save_retry.js?v=1"></script>
@@ -886,7 +886,8 @@
       const ids = residentRows.map(r => r.id);
       if (ids.length === 0) return;
       const { data } = await db.from('diaper_items')
-        .select('id, resident_id, name, maker, item_type')
+        // pieces_per_pack は「◯袋＋◯枚」表示に使う（2026-09-29 オーナー要望）
+        .select('id, resident_id, name, maker, item_type, pieces_per_pack')
         .in('resident_id', ids).eq('active', true);
       (data || []).forEach(item => {
         if (!diaperItemsByResident[item.resident_id]) diaperItemsByResident[item.resident_id] = [];
@@ -909,7 +910,7 @@
         //  - computeStock: 最新の棚卸し以降の全usageが必要（14日で切ると在庫を過大評価する）
         //  - avgDaily: 直近14日のみ使用
         const evRes = await db.from('diaper_events')
-          .select('item_id, type, pieces, event_date').in('item_id', itemIds);
+          .select('item_id, type, pieces, event_date, created_at').in('item_id', itemIds);
         if (evRes.error) {
           console.error('オムツ在庫の取得に失敗（バッジ非表示で続行）:', evRes.error);
           diaperStatusByItem = {}; diaperStockByItem = {}; return;
@@ -955,7 +956,7 @@
       const items = diaperItemsByResident[residentId] || [];
       // 在庫の取得に失敗すると残量が1件も出ない。何も出ないのを現場が「在庫あり」と
       // 読み違えないよう、その時だけ一言出す（2026-09-29 ネイト指摘）。
-      const shownCount = items.filter(i => DiaperStockLabel.stockLabel(diaperStockByItem[i.id]) !== '').length;
+      const shownCount = items.filter(i => DiaperStockLabel.stockLabel(diaperStockByItem[i.id], i.pieces_per_pack) !== '').length;
       const note = DiaperStockLabel.stockUnavailableNote(items.length, shownCount);
       if (note) {
         const noteEl = document.createElement('div');
@@ -980,7 +981,7 @@
         // 残量を数字で出す（2026-09-29 オーナー要望）。押す前に今どれだけ残っているかが見え、
         // マイナスなら記録のずれにその場で気づける。数えられない時は何も出さない。
         const stockNum = diaperStockByItem[item.id];
-        const stockText = DiaperStockLabel.stockLabel(stockNum);
+        const stockText = DiaperStockLabel.stockLabel(stockNum, item.pieces_per_pack);
         const stockCls = DiaperStockLabel.stockClass(stockNum);
         // title＝「今入力している分は引かれていない」ことの説明。＋を押しても数字が
         // 動かないのは正しい挙動（保存されるまでDBの在庫は変わらない）なので、

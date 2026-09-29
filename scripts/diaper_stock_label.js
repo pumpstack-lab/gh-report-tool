@@ -21,10 +21,24 @@ function _isCountable(stock) {
 
 // 表示文字列。数えられない時は空文字（嘘の数字を出さず、何も出さない）。
 // マイナスは全角の − を使う。半角 - は細くて見落とすため（現場はスマホで見る）。
-function stockLabel(stock) {
+//
+// piecesPerPack（1袋の枚数）を渡すと「残り4袋＋16枚（合計120枚）」の形にする
+// （2026-09-29 オーナー要望: 現場は袋で数えるので合計枚数だけだと実物と照合しづらい）。
+// ⚠️ マイナスは袋に割らない。記録のずれであって実物と対応しないため、
+//    「−1袋＋…」のような現実に存在しない数え方を見せない。
+function stockLabel(stock, piecesPerPack) {
   if (!_isCountable(stock)) return '';
   if (stock < 0) return `残り−${Math.abs(stock)}枚`;
-  return `残り${stock}枚`;
+
+  const per = piecesPerPack;
+  const usePack = typeof per === 'number' && Number.isFinite(per) && per > 0;
+  if (!usePack) return `残り${stock}枚`;
+
+  const packs = Math.floor(stock / per);
+  const rest = stock % per;
+  if (packs === 0) return `残り${stock}枚`;            // 1袋に満たない＝袋で数えない
+  if (rest === 0) return `残り${packs}袋（合計${stock}枚）`;
+  return `残り${packs}袋＋${rest}枚（合計${stock}枚）`;
 }
 
 // 見た目の区分。'minus' は赤系（0枚＝切れている／マイナス＝記録のずれ、どちらも要確認）。

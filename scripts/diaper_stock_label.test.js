@@ -77,3 +77,40 @@ test('stockUnavailableNote: 一部でも出ていれば何も言わない', () =
 test('stockUnavailableNote: そもそも品目が無い日は何も言わない（正常）', () => {
   assert.strictEqual(stockUnavailableNote(0, 0), '');
 });
+
+// ─── 袋＋枚の表記（2026-09-29 オーナー要望） ───
+// 「表示がトータル枚数表示になっているが、⚪︎袋+⚪︎枚（合計⚪︎枚）といった表記に変えて欲しい」
+// 現場は袋単位で数えるので、合計枚数だけでは実物と照合しづらい。
+
+test('stockLabel: 袋入数を渡すと「◯袋＋◯枚（合計◯枚）」', () => {
+  // 大判夜用パッド 26枚入 / 在庫104枚 = 4袋ちょうど
+  assert.strictEqual(stockLabel(104, 26), '残り4袋（合計104枚）');
+  // 端数あり: 20枚入 / 在庫50枚 = 2袋と10枚
+  assert.strictEqual(stockLabel(50, 20), '残り2袋＋10枚（合計50枚）');
+});
+
+test('stockLabel: 1袋に満たない端数だけなら袋を書かない', () => {
+  assert.strictEqual(stockLabel(6, 20), '残り6枚');
+  assert.strictEqual(stockLabel(0, 20), '残り0枚');
+});
+
+test('stockLabel: マイナスは袋に割らず枚数のまま（記録のずれなので実物と対応しない）', () => {
+  assert.strictEqual(stockLabel(-13, 20), '残り−13枚');
+  assert.strictEqual(stockLabel(-104, 26), '残り−104枚');
+});
+
+test('stockLabel: 袋入数が無い/不正なら従来どおり合計枚数だけ', () => {
+  assert.strictEqual(stockLabel(104), '残り104枚');
+  assert.strictEqual(stockLabel(104, null), '残り104枚');
+  assert.strictEqual(stockLabel(104, 0), '残り104枚');
+  assert.strictEqual(stockLabel(104, -5), '残り104枚');
+  assert.strictEqual(stockLabel(104, '26'), '残り104枚');
+});
+
+test('stockLabel: ちょうど1袋は「1袋」', () => {
+  assert.strictEqual(stockLabel(20, 20), '残り1袋（合計20枚）');
+});
+
+test('実データ再現: 若窪さんの品目（棚卸し16＋納品104＝120枚・26枚入）', () => {
+  assert.strictEqual(stockLabel(120, 26), '残り4袋＋16枚（合計120枚）');
+});
