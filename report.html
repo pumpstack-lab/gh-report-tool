@@ -9,6 +9,7 @@
   <script src="scripts/auth_gate.js?v=1"></script>
   <script src="scripts/auth_ui.js?v=1"></script>
   <script src="diaper-logic.js?v=2"></script>
+  <script src="scripts/diaper_stock_label.js?v=1"></script>
   <script src="scripts/report_guard.js?v=1"></script>
   <script src="scripts/report_patch.js?v=2"></script>
   <script src="scripts/save_retry.js?v=1"></script>
@@ -164,6 +165,20 @@
     }
     .diaper-stepper-btn:active { background: #eef6ff; }
     .diaper-stepper-count { min-width: 24px; text-align: center; font-weight: bold; }
+    /* 残量の数字（2026-09-29）。品目名のすぐ後ろに小さく出す。
+       minus＝0枚以下は赤字＋太字で、記録のずれ・在庫切れに気づけるようにする。 */
+    .diaper-stock {
+      margin-left: 6px;
+      font-size: 12px;
+      white-space: nowrap;
+      color: #555;
+    }
+    .diaper-stock.minus { color: #c0392b; font-weight: bold; }
+    /* 在庫を取得できなかった時だけ出る一言。「何も出ない＝在庫あり」の誤読を防ぐ。 */
+    .diaper-stock-note {
+      margin: 2px 0 6px; padding: 6px 8px; font-size: 12px;
+      color: #96610a; background: #fff8ec; border: 1px solid #f0cf9a; border-radius: 6px;
+    }
     /* 在庫が少ないときだけ出るバッジ。色は管理画面と同じ意味（赤=残7日以内・黄=残14日以内）。
        色だけに頼らずテキスト「残り少」を必ず伴う。 */
     .diaper-low-badge {
@@ -850,6 +865,9 @@
     let diaperItemsByResident = {}; // { residentId: [{id, name}] }
     let diaperUsageValues = {};     // { itemId: count }
     let diaperStatusByItem = {};    // { itemId: 'red'|'yellow'|'ok'|'pending' }
+    // 残量そのもの。従来はバッジ判定に使って捨てていたが、現場が入力画面で
+    // 「明らかにずれていたら分かる」ようにするため保持して表示する（2026-09-29 オーナー要望）
+    let diaperStockByItem = {};     // { itemId: 残り枚数（マイナスもそのまま） }
 
     function escapeHtml(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 
@@ -879,7 +897,7 @@
     // 在庫の残り具合を判定する。管理画面と同じ diaper-logic.js を使うので判定がズレない。
     // 失敗しても日報入力は従来通り動かす（バッジが出ないだけ）＝在庫表示のせいで日報が書けなくなるのを防ぐ。
     async function loadDiaperStock() {
-      diaperStatusByItem = {};
+      diaperStatusByItem = {}; diaperStockByItem = {};
       try {
         const itemIds = Object.values(diaperItemsByResident).flat().map(i => i.id);
         if (itemIds.length === 0) return;
@@ -894,7 +912,7 @@
           .select('item_id, type, pieces, event_date').in('item_id', itemIds);
         if (evRes.error) {
           console.error('オムツ在庫の取得に失敗（バッジ非表示で続行）:', evRes.error);
-          diaperStatusByItem = {}; return;
+          diaperStatusByItem = {}; diaperStockByItem = {}; return;
         }
         const t0 = new Date(); t0.setDate(t0.getDate() - 13);
         let usageFrom = `${t0.getFullYear()}-${String(t0.getMonth()+1).padStart(2,'0')}-${String(t0.getDate()).padStart(2,'0')}`;
@@ -913,7 +931,7 @@
         // 不正確な警告は現場の信用を失うので、失敗したらバッジを一切出さない。
         if (usRes.error) {
           console.error('オムツ在庫の取得に失敗（バッジ非表示で続行）:', usRes.error);
-          diaperStatusByItem = {};
+          diaperStatusByItem = {}; diaperStockByItem = {};
           return;
         }
         const events = evRes.data, usages = usRes.data;
@@ -925,15 +943,26 @@
           const stock = DiaperLogic.computeStock(ev, us);
           const days = DiaperLogic.daysLeft(stock, DiaperLogic.avgDaily(us, today));
           diaperStatusByItem[id] = DiaperLogic.statusOf(days);
+          diaperStockByItem[id] = stock;  // 入力欄に「残り◯枚」として出す
         });
       } catch (e) {
         console.error('オムツ在庫の取得に失敗（バッジ非表示で続行）:', e);
-        diaperStatusByItem = {};
+        diaperStatusByItem = {}; diaperStockByItem = {};
       }
     }
 
     function renderDiaperStepper(container, residentId) {
       const items = diaperItemsByResident[residentId] || [];
+      // 在庫の取得に失敗すると残量が1件も出ない。何も出ないのを現場が「在庫あり」と
+      // 読み違えないよう、その時だけ一言出す（2026-09-29 ネイト指摘）。
+      const shownCount = items.filter(i => DiaperStockLabel.stockLabel(diaperStockByItem[i.id]) !== '').length;
+      const note = DiaperStockLabel.stockUnavailableNote(items.length, shownCount);
+      if (note) {
+        const noteEl = document.createElement('div');
+        noteEl.className = 'diaper-stock-note';
+        noteEl.textContent = note;
+        container.appendChild(noteEl);
+      }
       items.forEach(item => {
         const row = document.createElement('div');
         row.className = 'diaper-stepper-row';
@@ -948,8 +977,18 @@
         const lowBadge = (st === 'red' || st === 'yellow')
           ? `<button type="button" class="diaper-low-badge ${st}" title="不足品に追加">残り少 ＋不足品</button>` : '';
         const label = DiaperLogic.itemLabel(item);
+        // 残量を数字で出す（2026-09-29 オーナー要望）。押す前に今どれだけ残っているかが見え、
+        // マイナスなら記録のずれにその場で気づける。数えられない時は何も出さない。
+        const stockNum = diaperStockByItem[item.id];
+        const stockText = DiaperStockLabel.stockLabel(stockNum);
+        const stockCls = DiaperStockLabel.stockClass(stockNum);
+        // title＝「今入力している分は引かれていない」ことの説明。＋を押しても数字が
+        // 動かないのは正しい挙動（保存されるまでDBの在庫は変わらない）なので、
+        // プレビューで減らすのではなく注記で伝える（2026-09-29 ネイト精査で方針確定）。
+        const stockEl = stockText
+          ? `<span class="diaper-stock ${stockCls}" title="保存済みの残量です（今入力中の数は含みません）">${escapeHtml(stockText)}</span>` : '';
         row.innerHTML = `
-          <span class="diaper-stepper-name">${escapeHtml(label)}${lowBadge}</span>
+          <span class="diaper-stepper-name">${escapeHtml(label)}${stockEl}${lowBadge}</span>
           <button type="button" class="diaper-stepper-btn" data-op="minus" aria-label="${escapeHtml(label)}を1減らす">−</button>
           <span class="diaper-stepper-count">${current}</span>
           <button type="button" class="diaper-stepper-btn" data-op="plus" aria-label="${escapeHtml(label)}を1増やす">＋</button>
