@@ -1513,54 +1513,60 @@
           const slot = cb.dataset.slot;
           // 日付切替の隙間で別日付に書かない（persistBowelRow と同じガード）
           if (patrolLoadedForDate !== dateEl.value) { cb.checked = !cb.checked; return; }
-          const rows = patrolRowsFor(residentId);
-          const existing = rows.find(r => r.slot === slot);
-          if (cb.checked) {
-            if (existing) return;
-            const payload = {
-              gh_num: parseInt(ghNum), report_date: dateEl.value,
-              resident_id: parseInt(residentId, 10), resident_name: residentName, slot,
-            };
-            // 共有タブレット複数台の同時タップで unique 違反を「失敗」に見せない
-            const { data, error } = await db.from('patrol_records')
-              .upsert(payload, { onConflict: 'gh_num,report_date,resident_id,slot', ignoreDuplicates: true })
-              .select('id');
+          try { await handlePatrolChange(cb, slot); } finally { cb.disabled = !patrolLoadedForDate; }
+        });
+      });
+
+      async function handlePatrolChange(cb, slot) {
+        const rows = patrolRowsFor(residentId);
+        const existing = rows.find(r => r.slot === slot);
+        // 保存が終わるまで同じ枠を二度押しできないようにする（renderPatrolBlock で戻す）
+        cb.disabled = true;
+        if (cb.checked) {
+          if (existing) return;
+          const payload = {
+            gh_num: parseInt(ghNum), report_date: dateEl.value,
+            resident_id: parseInt(residentId, 10), resident_name: residentName, slot,
+          };
+          // 共有タブレット複数台の同時タップで unique 違反を「失敗」に見せない
+          const { data, error } = await db.from('patrol_records')
+            .upsert(payload, { onConflict: 'gh_num,report_date,resident_id,slot', ignoreDuplicates: true })
+            .select('id');
+          if (error) {
+            console.error('patrol_records upsert failed:', error.message);
+            cb.checked = false;
+            errEl.style.display = '';
+            return;
+          }
+          let id = data && data[0] ? data[0].id : null;
+          if (id == null) {
+            // 他端末が先に入れていた（ignoreDuplicates で行が返らない）→ id を取り直す
+            const { data: found } = await db.from('patrol_records').select('id')
+              .eq('gh_num', parseInt(ghNum)).eq('report_date', dateEl.value)
+              .eq('resident_id', parseInt(residentId, 10)).eq('slot', slot).limit(1);
+            id = found && found[0] ? found[0].id : null;
+          }
+          rows.push({ id, slot });
+        } else {
+          if (!existing) return;
+          if (!confirm(`${PatrolCopy.slotLabel(slot)} の見回りチェックを外しますか？`)) {
+            cb.checked = true;
+            return;
+          }
+          if (existing.id != null) {
+            const { error } = await db.from('patrol_records').delete().eq('id', existing.id);
             if (error) {
-              console.error('patrol_records upsert failed:', error.message);
-              cb.checked = false;
+              console.error('patrol_records delete failed:', error.message);
+              cb.checked = true;
               errEl.style.display = '';
               return;
             }
-            let id = data && data[0] ? data[0].id : null;
-            if (id == null) {
-              // 他端末が先に入れていた（ignoreDuplicates で行が返らない）→ id を取り直す
-              const { data: found } = await db.from('patrol_records').select('id')
-                .eq('gh_num', parseInt(ghNum)).eq('report_date', dateEl.value)
-                .eq('resident_id', parseInt(residentId, 10)).eq('slot', slot).limit(1);
-              id = found && found[0] ? found[0].id : null;
-            }
-            rows.push({ id, slot });
-          } else {
-            if (!existing) return;
-            if (!confirm(`${PatrolCopy.slotLabel(slot)} の見回りチェックを外しますか？`)) {
-              cb.checked = true;
-              return;
-            }
-            if (existing.id != null) {
-              const { error } = await db.from('patrol_records').delete().eq('id', existing.id);
-              if (error) {
-                console.error('patrol_records delete failed:', error.message);
-                cb.checked = true;
-                errEl.style.display = '';
-                return;
-              }
-            }
-            rows.splice(rows.indexOf(existing), 1);
           }
-          errEl.style.display = 'none';
-          renderPatrolBlock(block);
-        });
-      });
+          rows.splice(rows.indexOf(existing), 1);
+        }
+        errEl.style.display = 'none';
+        renderPatrolBlock(block);
+      }
 
       block.querySelector('.patrol-copy-btn').addEventListener('click', async () => {
         const text = PatrolCopy.buildPatrolCopyText(residentName, patrolRowsFor(residentId));
