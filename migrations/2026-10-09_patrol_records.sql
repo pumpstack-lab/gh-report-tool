@@ -19,8 +19,11 @@ create unique index if not exists patrol_records_uniq
   on patrol_records (gh_num, report_date, resident_id, slot);
 create index if not exists patrol_records_date_idx on patrol_records (report_date, gh_num);
 alter table patrol_records enable row level security;
+-- 本番の bowel_records は authenticated_all（ログイン済みのみ）に絞られている（2026-10-09 本番 pg_policies で実測）。
+-- 同型にする。anon には開けない（設計書 §3-1 の「allow_all」は実測前の記述・ここが正）。
 drop policy if exists allow_all on patrol_records;
-create policy allow_all on patrol_records for all to public using (true) with check (true);
+drop policy if exists authenticated_all on patrol_records;
+create policy authenticated_all on patrol_records for all to authenticated using (true) with check (true);
 
 -- ─── 適用後の確認（Getter 本体・本番） ───
 --   psql "$URL" -c "\d patrol_records"
