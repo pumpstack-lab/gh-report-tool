@@ -831,6 +831,8 @@
         '.bowel-time-input, .bowel-stool-select, .bowel-amount-select, .bowel-place-select, ' +
         '.patrol-checkbox, .patrol-copy-btn'
       ).forEach(el => {
+        // 見回りは読み込みが終わっていない/失敗している間は有効化しない（renderPatrolBlock と同じ条件）
+        if (el.classList.contains('patrol-checkbox')) { el.disabled = isDisabled || !patrolLoadedForDate; return; }
         if ('disabled' in el) el.disabled = isDisabled;
         else el.style.pointerEvents = isDisabled ? 'none' : '';
       });
@@ -1448,17 +1450,25 @@
       return patrolRecordsByResident[residentId];
     }
 
+    let patrolLoadSeq = 0;             // 日付を素早く切り替えた時に古い応答を捨てるための連番
     async function loadPatrolRecords(dateISO) {
+      const seq = ++patrolLoadSeq;
       patrolLoadedForDate = null;
       patrolRecordsByResident = {};
       const { data, error } = await db.from('patrol_records')
         .select('id, resident_id, slot')
         .eq('gh_num', parseInt(ghNum)).eq('report_date', dateISO);
+      if (seq !== patrolLoadSeq) return; // 後から出した読み込みがある＝この応答は古い
       if (error) {
         console.error('patrol_records load failed:', error.message);
         return;
       }
-      (data || []).forEach(row => patrolRowsFor(row.resident_id).push(row));
+      const byResident = {};
+      (data || []).forEach(row => {
+        if (!byResident[row.resident_id]) byResident[row.resident_id] = [];
+        byResident[row.resident_id].push(row);
+      });
+      patrolRecordsByResident = byResident;
       patrolLoadedForDate = dateISO;
     }
 
@@ -1542,10 +1552,11 @@
           let id = data && data[0] ? data[0].id : null;
           if (id == null) {
             // 他端末が先に入れていた（ignoreDuplicates で行が返らない）→ id を取り直す
-            const { data: found } = await db.from('patrol_records').select('id')
-              .eq('gh_num', parseInt(ghNum)).eq('report_date', dateEl.value)
-              .eq('resident_id', parseInt(residentId, 10)).eq('slot', slot).limit(1);
-            id = found && found[0] ? found[0].id : null;
+            const { data: found, error: findErr } = await db.from('patrol_records').select('id')
+              .eq('gh_num', payload.gh_num).eq('report_date', payload.report_date)
+              .eq('resident_id', payload.resident_id).eq('slot', slot).limit(1);
+            if (findErr) console.error('patrol_records select failed:', findErr.message);
+            id = !findErr && found && found[0] ? found[0].id : null;
           }
           if (id == null) {
             // id が取れない行を抱えると、外した時に delete が飛ばず再読込で復活する（ネイト指摘）→ 保存失敗扱い

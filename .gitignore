@@ -1,2 +1,3 @@
 # 検証用スクリーンショット（履歴に残さない）
 scripts/_*.png
+scripts/__pycache__/
