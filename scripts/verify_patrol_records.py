@@ -154,7 +154,7 @@ def case3(pw):
     clip = page.evaluate("navigator.clipboard.readText()")
     ok = (len(posts) == 1 and "resolution=ignore-duplicates" in prefer
           and body.get("slot") == "23:30" and body.get("resident_name") == "山田太郎"
-          and clip == "山田太郎さん　見回り　22:30　23:30")
+          and clip == "山田太郎さん　居室確認　22:30　23:30")
     record("3. 23:30 ON→POST(ignore-duplicates)・コピー文面", ok, f"prefer={prefer} body={body} clip={clip}")
     browser.close()
     return ok

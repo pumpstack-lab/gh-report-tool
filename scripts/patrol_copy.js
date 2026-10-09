@@ -1,5 +1,5 @@
 // /Users/Yutalow420/Desktop/01 開発/gh-report-tool/scripts/patrol_copy.js
-// 見回りチェックの定数とコピー文字列を作る純粋関数（UMD）。report.html と Node の両方から読む。
+// 居室確認（見回り）チェックの定数とコピー文字列を作る純粋関数（UMD）。report.html と Node の両方から読む。
 // 設計: care-stack-absence/docs/superpowers/specs/2026-10-09-patrol-check-design.md §3-3
 (function (root, factory) {
   const mod = factory();
@@ -38,7 +38,7 @@
     const known = PATROL_SLOTS.map(s => s.key).filter(k => keys.includes(k));
     const unknown = keys.filter(k => !PATROL_SLOTS.some(s => s.key === k)).sort();
     const labels = known.concat(unknown).map(slotLabel);
-    return `${name}さん　見回り　${labels.join('　')}`;
+    return `${name}さん　居室確認　${labels.join('　')}`;
   }
 
   return { PATROL_SLOTS, slotLabel, buildPatrolCopyText };
