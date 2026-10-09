@@ -1472,15 +1472,15 @@
       block.dataset.residentId = residentId;
       block.dataset.residentName = residentName;
       const boxes = PatrolCopy.PATROL_SLOTS.map(s => `
-          <label style="display:flex;align-items:center;gap:4px;font-size:14px">
-            <input type="checkbox" class="patrol-checkbox" data-slot="${s.key}">${s.label}
+          <label style="display:flex;align-items:center;gap:6px;font-size:15px;min-height:44px;padding:0 6px;cursor:pointer">
+            <input type="checkbox" class="patrol-checkbox" data-slot="${s.key}" style="width:22px;height:22px;margin:0">${s.label}
           </label>`).join('');
       block.innerHTML = `
         <div class="patrol-header" style="display:flex;justify-content:space-between;align-items:center;margin-top:10px">
           <div class="patrol-label" style="font-size:13px;font-weight:bold;color:#4a90d9">見回り</div>
           <button type="button" class="patrol-copy-btn" style="display:none;padding:4px 10px;font-size:12px;background:#fff;color:#4a90d9;border:1px solid #4a90d9;border-radius:6px">コピー</button>
         </div>
-        <div class="patrol-slots" style="display:flex;flex-wrap:wrap;gap:6px 16px;margin:6px 0">${boxes}</div>
+        <div class="patrol-slots" style="display:flex;flex-wrap:wrap;gap:0 8px;margin:2px 0">${boxes}</div>
         <div class="patrol-error" style="display:none;color:#e74c3c;font-size:12px;margin:0 0 6px">保存できませんでした。通信を確認してもう一度お試しください</div>
         <div class="patrol-unavailable-msg" style="display:none;font-size:12px;color:#e74c3c">見回り記録を読み込めませんでした。再読み込みしてください</div>
       `;
