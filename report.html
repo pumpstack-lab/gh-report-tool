@@ -828,7 +828,8 @@
         '#shortage-list input, #shortage-list .btn-remove-shortage, #btn-add-shortage, ' +
         '.diaper-stepper-btn, #photo-upload-area, ' +
         '.bowel-add-btn, .bowel-none-checkbox, .bowel-row-del-btn, ' +
-        '.bowel-time-input, .bowel-stool-select, .bowel-amount-select, .bowel-place-select'
+        '.bowel-time-input, .bowel-stool-select, .bowel-amount-select, .bowel-place-select, ' +
+        '.patrol-checkbox, .patrol-copy-btn'
       ).forEach(el => {
         if ('disabled' in el) el.disabled = isDisabled;
         else el.style.pointerEvents = isDisabled ? 'none' : '';
@@ -1545,6 +1546,13 @@
               .eq('gh_num', parseInt(ghNum)).eq('report_date', dateEl.value)
               .eq('resident_id', parseInt(residentId, 10)).eq('slot', slot).limit(1);
             id = found && found[0] ? found[0].id : null;
+          }
+          if (id == null) {
+            // id が取れない行を抱えると、外した時に delete が飛ばず再読込で復活する（ネイト指摘）→ 保存失敗扱い
+            console.error('patrol_records upsert returned no id');
+            cb.checked = false;
+            errEl.style.display = '';
+            return;
           }
           rows.push({ id, slot });
         } else {
