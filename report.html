@@ -17,6 +17,7 @@
   <script src="scripts/banner_stack.js?v=1"></script>
   <script src="scripts/worktype_rules.js?v=1"></script>
   <script src="scripts/bowel_copy.js?v=1"></script>
+  <script src="scripts/patrol_copy.js?v=1"></script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
@@ -1027,6 +1028,54 @@
     }
 
 
+    // ─── コピー共用（排便・見回り）: clipboard → execCommand → 長押し用textarea（閉じるボタン付き） ───
+    // 要配慮個人情報を含むため、表示したtextareaはユーザーが明示的に閉じる（blur自動消去はiOSで誤発火する。
+    // 2026-09-08セキュリティレビュー指摘）。
+    async function copyTextWithFallback(block, text, btn, fallbackClass) {
+      const showCopied = () => {
+        const orig = btn.textContent;
+        btn.textContent = 'コピーしました';
+        setTimeout(() => { btn.textContent = orig; }, 2000);
+      };
+      try {
+        await navigator.clipboard.writeText(text);
+        showCopied();
+        return;
+      } catch (e) { /* フォールバック1へ */ }
+      try {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.focus();
+        ta.select();
+        const ok = document.execCommand('copy');
+        document.body.removeChild(ta);
+        if (ok) { showCopied(); return; }
+      } catch (e2) { /* フォールバック2へ */ }
+      const existing = block.querySelector(`.${fallbackClass}`);
+      if (existing) existing.remove();
+      const wrap = document.createElement('div');
+      wrap.className = fallbackClass;
+      wrap.style.cssText = 'margin-top:6px';
+      const ta2 = document.createElement('textarea');
+      ta2.value = text;
+      ta2.readOnly = true;
+      ta2.style.cssText = 'width:100%;height:60px';
+      const closeBtn = document.createElement('button');
+      closeBtn.type = 'button';
+      closeBtn.textContent = '閉じる';
+      closeBtn.style.cssText = 'margin-top:4px;padding:6px 12px;font-size:12px;background:#fff;color:#666;border:1px solid #ccc;border-radius:6px';
+      closeBtn.addEventListener('click', () => wrap.remove());
+      wrap.appendChild(ta2);
+      wrap.appendChild(closeBtn);
+      block.appendChild(wrap);
+      ta2.focus();
+      ta2.select();
+      alert('長押しでコピーしてください');
+    }
+
     // ─── 排便状況（利用者×GH×日付・別テーブル bowel_records） ───
     // 2026-09-07設計: reports.residentsには入れない（差分保存CASの競合を避けるため）。
     // 本文のautosave/差分保存とは完全に独立した保存経路（テーブルへの直接INSERT/UPDATE/DELETE）。
@@ -1384,55 +1433,138 @@
       block.querySelector('.bowel-copy-btn').addEventListener('click', async () => {
         const recordRows = bowelRowsFor(residentId).filter(r => r.kind !== 'none');
         const text = BowelCopy.buildBowelCopyText(residentName, recordRows);
-        const btn = block.querySelector('.bowel-copy-btn');
-        const showCopied = () => {
-          const orig = btn.textContent;
-          btn.textContent = 'コピーしました';
-          setTimeout(() => { btn.textContent = orig; }, 2000);
-        };
-        try {
-          await navigator.clipboard.writeText(text);
-          showCopied();
-        } catch (e) {
-          // フォールバック1: execCommand('copy')
-          try {
-            const ta = document.createElement('textarea');
-            ta.value = text;
-            ta.style.position = 'fixed';
-            ta.style.opacity = '0';
-            document.body.appendChild(ta);
-            ta.focus();
-            ta.select();
-            const ok = document.execCommand('copy');
-            document.body.removeChild(ta);
-            if (ok) { showCopied(); return; }
-          } catch (e2) { /* フォールバック2へ */ }
-          // フォールバック2: テキストを選択状態にして長押しコピーを促す。
-          // 排便記録は要配慮個人情報（健康情報）・共有タブレット運用のため、
-          // 表示したtextareaは「閉じる」ボタンでユーザーが明示的に消せるようにする
-          // （blurでの自動消去はiOSで意図せず発火し長押しコピー前に消えるため使わない。
-          //  2026-09-08セキュリティレビュー指摘）。
-          const existing = block.querySelector('.bowel-copy-fallback');
-          if (existing) existing.remove();
-          const wrap = document.createElement('div');
-          wrap.className = 'bowel-copy-fallback';
-          wrap.style.cssText = 'margin-top:6px';
-          const ta2 = document.createElement('textarea');
-          ta2.value = text;
-          ta2.readOnly = true;
-          ta2.style.cssText = 'width:100%;height:60px';
-          const closeBtn = document.createElement('button');
-          closeBtn.type = 'button';
-          closeBtn.textContent = '閉じる';
-          closeBtn.style.cssText = 'margin-top:4px;padding:6px 12px;font-size:12px;background:#fff;color:#666;border:1px solid #ccc;border-radius:6px';
-          closeBtn.addEventListener('click', () => wrap.remove());
-          wrap.appendChild(ta2);
-          wrap.appendChild(closeBtn);
-          block.appendChild(wrap);
-          ta2.focus();
-          ta2.select();
-          alert('長押しでコピーしてください');
-        }
+        await copyTextWithFallback(block, text, block.querySelector('.bowel-copy-btn'), 'bowel-copy-fallback');
+      });
+    }
+
+    // ─── 見回り（利用者×GH×日付・別テーブル patrol_records） ───
+    // 2026-10-09設計: 1チェック=1行・即時 upsert/delete・下書きなし（未完成状態が無いため）。
+    let patrolRecordsByResident = {};   // { residentId: [{id, slot}] }
+    let patrolLoadedForDate = null;     // ロード完了の日付（未完了/失敗なら null）
+
+    function patrolRowsFor(residentId) {
+      if (!patrolRecordsByResident[residentId]) patrolRecordsByResident[residentId] = [];
+      return patrolRecordsByResident[residentId];
+    }
+
+    async function loadPatrolRecords(dateISO) {
+      patrolLoadedForDate = null;
+      patrolRecordsByResident = {};
+      const { data, error } = await db.from('patrol_records')
+        .select('id, resident_id, slot')
+        .eq('gh_num', parseInt(ghNum)).eq('report_date', dateISO);
+      if (error) {
+        console.error('patrol_records load failed:', error.message);
+        return;
+      }
+      (data || []).forEach(row => patrolRowsFor(row.resident_id).push(row));
+      patrolLoadedForDate = dateISO;
+    }
+
+    function rerenderPatrolBlocks() {
+      document.querySelectorAll('.patrol-block').forEach(renderPatrolBlock);
+    }
+
+    function renderPatrolSection(container, residentIdArg, residentName) {
+      const residentId = String(residentIdArg);
+      const block = document.createElement('div');
+      block.className = 'patrol-block';
+      block.dataset.residentId = residentId;
+      block.dataset.residentName = residentName;
+      const boxes = PatrolCopy.PATROL_SLOTS.map(s => `
+          <label style="display:flex;align-items:center;gap:4px;font-size:14px">
+            <input type="checkbox" class="patrol-checkbox" data-slot="${s.key}">${s.label}
+          </label>`).join('');
+      block.innerHTML = `
+        <div class="patrol-header" style="display:flex;justify-content:space-between;align-items:center;margin-top:10px">
+          <div class="patrol-label" style="font-size:13px;font-weight:bold;color:#4a90d9">見回り</div>
+          <button type="button" class="patrol-copy-btn" style="display:none;padding:4px 10px;font-size:12px;background:#fff;color:#4a90d9;border:1px solid #4a90d9;border-radius:6px">コピー</button>
+        </div>
+        <div class="patrol-slots" style="display:flex;flex-wrap:wrap;gap:6px 16px;margin:6px 0">${boxes}</div>
+        <div class="patrol-error" style="display:none;color:#e74c3c;font-size:12px;margin:0 0 6px">保存できませんでした。通信を確認してもう一度お試しください</div>
+        <div class="patrol-unavailable-msg" style="display:none;font-size:12px;color:#e74c3c">見回り記録を読み込めませんでした。再読み込みしてください</div>
+      `;
+      container.appendChild(block);
+      renderPatrolBlock(block);
+      return block;
+    }
+
+    function renderPatrolBlock(block) {
+      const residentId = block.dataset.residentId;
+      const rows = patrolRowsFor(residentId);
+      block.querySelectorAll('.patrol-checkbox').forEach(cb => {
+        cb.checked = rows.some(r => r.slot === cb.dataset.slot);
+        cb.disabled = !patrolLoadedForDate;
+      });
+      const copyText = PatrolCopy.buildPatrolCopyText(block.dataset.residentName, rows);
+      block.querySelector('.patrol-copy-btn').style.display = copyText ? '' : 'none';
+      block.querySelector('.patrol-unavailable-msg').style.display = patrolLoadedForDate ? 'none' : '';
+      const fb = block.querySelector('.patrol-copy-fallback');
+      if (fb) fb.remove();
+    }
+
+    function bindPatrolSectionEvents(block) {
+      const residentId = block.dataset.residentId;
+      const residentName = block.dataset.residentName;
+      const errEl = block.querySelector('.patrol-error');
+
+      block.querySelectorAll('.patrol-checkbox').forEach(cb => {
+        cb.addEventListener('change', async (e) => {
+          const slot = cb.dataset.slot;
+          // 日付切替の隙間で別日付に書かない（persistBowelRow と同じガード）
+          if (patrolLoadedForDate !== dateEl.value) { cb.checked = !cb.checked; return; }
+          const rows = patrolRowsFor(residentId);
+          const existing = rows.find(r => r.slot === slot);
+          if (cb.checked) {
+            if (existing) return;
+            const payload = {
+              gh_num: parseInt(ghNum), report_date: dateEl.value,
+              resident_id: parseInt(residentId, 10), resident_name: residentName, slot,
+            };
+            // 共有タブレット複数台の同時タップで unique 違反を「失敗」に見せない
+            const { data, error } = await db.from('patrol_records')
+              .upsert(payload, { onConflict: 'gh_num,report_date,resident_id,slot', ignoreDuplicates: true })
+              .select('id');
+            if (error) {
+              console.error('patrol_records upsert failed:', error.message);
+              cb.checked = false;
+              errEl.style.display = '';
+              return;
+            }
+            let id = data && data[0] ? data[0].id : null;
+            if (id == null) {
+              // 他端末が先に入れていた（ignoreDuplicates で行が返らない）→ id を取り直す
+              const { data: found } = await db.from('patrol_records').select('id')
+                .eq('gh_num', parseInt(ghNum)).eq('report_date', dateEl.value)
+                .eq('resident_id', parseInt(residentId, 10)).eq('slot', slot).limit(1);
+              id = found && found[0] ? found[0].id : null;
+            }
+            rows.push({ id, slot });
+          } else {
+            if (!existing) return;
+            if (!confirm(`${PatrolCopy.slotLabel(slot)} の見回りチェックを外しますか？`)) {
+              cb.checked = true;
+              return;
+            }
+            if (existing.id != null) {
+              const { error } = await db.from('patrol_records').delete().eq('id', existing.id);
+              if (error) {
+                console.error('patrol_records delete failed:', error.message);
+                cb.checked = true;
+                errEl.style.display = '';
+                return;
+              }
+            }
+            rows.splice(rows.indexOf(existing), 1);
+          }
+          errEl.style.display = 'none';
+          renderPatrolBlock(block);
+        });
+      });
+
+      block.querySelector('.patrol-copy-btn').addEventListener('click', async () => {
+        const text = PatrolCopy.buildPatrolCopyText(residentName, patrolRowsFor(residentId));
+        await copyTextWithFallback(block, text, block.querySelector('.patrol-copy-btn'), 'patrol-copy-fallback');
       });
     }
 
@@ -2614,6 +2746,8 @@
       // 排便記録はその日付のデータなので日付ごとに取り直す（個人の希望品＝GHごと1回とは異なる）
       await loadBowelRecords(dateISO);
       restoreBowelDrafts(dateISO);
+      await loadPatrolRecords(dateISO);
+      rerenderPatrolBlocks();
       reportLoadedFor = dateISO;
       reportDirty = false; // ここでDOMはサーバー内容と一致済みなので、ロード中の入力(blocked)は破棄してよい
       offerDraftRestore(dateISO, (data && data.residents) || {});
@@ -2863,6 +2997,8 @@
           bindBowelTextareaHint(div, r.name);
           const bowelBlock = renderBowelSection(div, r.id, r.name);
           bindBowelSectionEvents(bowelBlock);
+          const patrolBlock = renderPatrolSection(div, r.id, r.name);
+          bindPatrolSectionEvents(patrolBlock);
           renderDiaperStepper(div, r.id);
           renderPersonalItems(div, r.id, r.name);
           container.appendChild(div);
@@ -2937,6 +3073,8 @@
       // 排便記録はその日付のデータなので日付ごとに取り直す（個人の希望品＝GHごと1回とは異なる）
       await loadBowelRecords(dateISO);
       restoreBowelDrafts(dateISO);
+      await loadPatrolRecords(dateISO);
+      rerenderPatrolBlocks();
       reportLoadedFor = dateISO;
       offerDraftRestore(dateISO, (reportData && reportData.residents) || {});
       setFormInputsDisabled(false);
