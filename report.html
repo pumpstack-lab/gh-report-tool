@@ -22,13 +22,13 @@
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
       font-family: 'Hiragino Kaku Gothic ProN', 'Meiryo', 'Yu Gothic', sans-serif;
-      background: #eef2f7;
+      background: #f6f1ec;
       min-height: 100vh;
       padding-bottom: 120px;
     }
 
     .page-header {
-      background: #4a90d9;
+      background: #dd6a12;
       color: white;
       padding: 14px 20px;
       display: flex;
@@ -53,10 +53,10 @@
     .section-label {
       font-size: 13px;
       font-weight: bold;
-      color: #4a90d9;
+      color: #c2570c;
       margin-bottom: 12px;
       padding-bottom: 8px;
-      border-bottom: 2px solid #eef2f7;
+      border-bottom: 2px solid #f6f1ec;
     }
 
     .date-card-section {
@@ -68,7 +68,7 @@
       position: relative;
       overflow: hidden;
     }
-    .date-card-section:active { background: #f0f6ff; }
+    .date-card-section:active { background: #fff4ea; }
     .date-card-inner {
       display: flex;
       align-items: center;
@@ -111,7 +111,7 @@
     .reporter-input {
       flex: 1;
       padding: 11px 14px;
-      border: 1.5px solid #d0d8e8;
+      border: 1.5px solid #e6d8ca;
       border-radius: 10px;
       font-size: 15px;
       font-family: inherit;
@@ -119,8 +119,8 @@
     }
     .reporter-input:focus {
       outline: none;
-      border-color: #4a90d9;
-      box-shadow: 0 0 0 3px rgba(74,144,217,0.15);
+      border-color: #dd6a12;
+      box-shadow: 0 0 0 3px rgba(221,106,18,0.15);
     }
 
     /* 競合バナーの選択肢（2026-09-15）。福祉記録なので「消える選択肢」と
@@ -151,7 +151,7 @@
       align-items: center;
       gap: 4px;
     }
-    .resident-name-label::before { content: '・'; color: #4a90d9; font-size: 20px; line-height: 1; }
+    .resident-name-label::before { content: '・'; color: #c2570c; font-size: 20px; line-height: 1; }
 
     .diaper-stepper-row {
       display: flex; align-items: center; gap: 10px;
@@ -160,11 +160,11 @@
     }
     .diaper-stepper-name { flex: 1; }
     .diaper-stepper-btn {
-      width: 44px; height: 44px; border-radius: 50%; border: 1.5px solid #4a90d9;
-      background: white; color: #4a90d9; font-size: 20px; font-weight: bold;
+      width: 44px; height: 44px; border-radius: 50%; border: 1.5px solid #dd6a12;
+      background: white; color: #c2570c; font-size: 20px; font-weight: bold;
       line-height: 1; cursor: pointer; flex-shrink: 0;
     }
-    .diaper-stepper-btn:active { background: #eef6ff; }
+    .diaper-stepper-btn:active { background: #fff4ea; }
     .diaper-stepper-count { min-width: 24px; text-align: center; font-weight: bold; }
     /* 残量の数字（2026-09-29）。品目名のすぐ後ろに小さく出す。
        minus＝0枚以下は赤字＋太字で、記録のずれ・在庫切れに気づけるようにする。 */
@@ -194,7 +194,7 @@
     textarea {
       width: 100%;
       padding: 12px 14px;
-      border: 1.5px solid #d0d8e8;
+      border: 1.5px solid #e6d8ca;
       border-radius: 10px;
       font-size: 14px;
       font-family: inherit;
@@ -206,8 +206,8 @@
     }
     textarea:focus {
       outline: none;
-      border-color: #4a90d9;
-      box-shadow: 0 0 0 3px rgba(74,144,217,0.15);
+      border-color: #dd6a12;
+      box-shadow: 0 0 0 3px rgba(221,106,18,0.15);
     }
     textarea::placeholder { color: #bbc; }
 
@@ -217,7 +217,7 @@
     .short-stay-section {
       margin-top: 24px;
       padding-top: 20px;
-      border-top: 2px dashed #d0d8e8;
+      border-top: 2px dashed #e6d8ca;
     }
     .short-stay-title {
       font-size: 13px;
@@ -241,13 +241,13 @@
     .short-stay-label {
       font-size: 14px;
       font-weight: bold;
-      color: #4a90d9;
+      color: #c2570c;
       white-space: nowrap;
     }
     .short-stay-name-input {
       flex: 1;
       padding: 6px 10px;
-      border: 1.5px solid #d0d8e8;
+      border: 1.5px solid #e6d8ca;
       border-radius: 8px;
       font-size: 14px;
       font-family: inherit;
@@ -255,13 +255,13 @@
     }
     .short-stay-name-input:focus {
       outline: none;
-      border-color: #4a90d9;
-      box-shadow: 0 0 0 3px rgba(74,144,217,0.15);
+      border-color: #dd6a12;
+      box-shadow: 0 0 0 3px rgba(221,106,18,0.15);
     }
     .btn-go-settings {
       display: inline-block;
       padding: 11px 22px;
-      background: #4a90d9;
+      background: #dd6a12;
       color: white;
       border-radius: 10px;
       text-decoration: none;
@@ -282,9 +282,9 @@
       flex: 1;
       padding: 14px;
       background: white;
-      border: 2px solid #4a90d9;
+      border: 2px solid #dd6a12;
       border-radius: 12px;
-      color: #4a90d9;
+      color: #c2570c;
       font-size: 15px;
       font-weight: bold;
       cursor: pointer;
@@ -293,7 +293,7 @@
     .btn-word {
       flex: 1;
       padding: 14px;
-      background: #4a90d9;
+      background: #dd6a12;
       color: white;
       border: none;
       border-radius: 12px;
@@ -302,12 +302,12 @@
       cursor: pointer;
       font-family: inherit;
     }
-    .btn-word:active { background: #3a7bc8; }
-    .btn-summary:active { background: #f0f6ff; }
+    .btn-word:active { background: #c45d0f; }
+    .btn-summary:active { background: #fff4ea; }
 
     .draft-indicator {
       font-size: 11px;
-      color: #4a90d9;
+      color: #c2570c;
       text-align: right;
       padding: 4px 16px 0;
       opacity: 0.7;
@@ -393,13 +393,13 @@
       font-weight: bold; font-size: 14px;
       margin: 16px 0 10px;
       padding: 6px 12px;
-      background: #f0f6ff;
-      border-left: 4px solid #4a90d9;
+      background: #fff4ea;
+      border-left: 4px solid #dd6a12;
       border-radius: 0 6px 6px 0;
     }
     .s-resident { margin-bottom: 14px; }
     .s-resident .r-name { font-weight: bold; font-size: 14px; margin-bottom: 4px; }
-    .s-resident .r-name::before { content: '・'; color: #4a90d9; }
+    .s-resident .r-name::before { content: '・'; color: #c2570c; }
     .s-resident .r-text {
       font-size: 13px; line-height: 1.8; white-space: pre-wrap;
       background: #f9f9f9; padding: 10px 14px; border-radius: 8px;
@@ -412,17 +412,17 @@
       gap: 8px;
       margin-bottom: 10px;
     }
-    .shortage-bullet { color: #4a90d9; font-size: 18px; flex-shrink: 0; }
+    .shortage-bullet { color: #c2570c; font-size: 18px; flex-shrink: 0; }
     .shortage-item-input {
       flex: 1;
       padding: 10px 12px;
-      border: 1.5px solid #d0d8e8;
+      border: 1.5px solid #e6d8ca;
       border-radius: 8px;
       font-size: 14px;
       font-family: inherit;
       color: #1a2a3a;
     }
-    .shortage-item-input:focus { outline: none; border-color: #4a90d9; }
+    .shortage-item-input:focus { outline: none; border-color: #dd6a12; }
     .btn-remove-shortage {
       width: 28px; height: 28px;
       background: #f0f0f0;
@@ -445,16 +445,16 @@
     .personal-item-date { font-size: 11px; color: #8a97a8; flex-shrink: 0; }
     .personal-item-add-row { display: flex; gap: 6px; margin-top: 6px; }
     .personal-item-input {
-      flex: 1; padding: 8px 10px; border: 1.5px solid #d0d8e8; border-radius: 8px;
+      flex: 1; padding: 8px 10px; border: 1.5px solid #e6d8ca; border-radius: 8px;
       font-size: 13px; font-family: inherit; color: #1a2a3a;
     }
-    .personal-item-input:focus { outline: none; border-color: #4a90d9; }
+    .personal-item-input:focus { outline: none; border-color: #dd6a12; }
     .btn-add-personal-item {
       min-height: 40px; padding: 8px 14px; font-size: 13px; font-weight: bold;
-      color: #2f6fb8; background: #f0f6ff; border: 1.5px dashed #4a90d9;
+      color: #c2570c; background: #fff4ea; border: 1.5px dashed #dd6a12;
       border-radius: 8px; font-family: inherit; cursor: pointer; flex-shrink: 0;
     }
-    .btn-add-personal-item:active { background: #e3eefb; }
+    .btn-add-personal-item:active { background: #fde8d6; }
     .btn-add-personal-item:disabled, .personal-item-input:disabled { opacity: 0.5; cursor: not-allowed; }
     .personal-item-add-error { font-size: 12px; color: #c0392b; margin-top: 4px; }
     .personal-items-unavailable-msg { font-size: 12px; color: #c0392b; margin-top: 4px; }
@@ -463,30 +463,30 @@
     .btn-add-shortage {
       margin-top: 8px;
       padding: 10px 16px;
-      background: #f0f6ff;
-      border: 1.5px dashed #4a90d9;
+      background: #fff4ea;
+      border: 1.5px dashed #dd6a12;
       border-radius: 8px;
-      color: #4a90d9;
+      color: #c2570c;
       font-size: 14px;
       font-weight: bold;
       cursor: pointer;
       font-family: inherit;
       width: 100%;
     }
-    .btn-add-shortage:active { background: #e0eeff; }
+    .btn-add-shortage:active { background: #fde8d6; }
 
     /* PHOTO UPLOAD */
     .photo-upload-area {
-      border: 2px dashed #c0d4f0;
+      border: 2px dashed #f3c9a6;
       border-radius: 12px;
       padding: 20px;
       text-align: center;
       cursor: pointer;
-      background: #f8fbff;
+      background: #fffaf5;
       transition: border-color 0.2s;
       margin-bottom: 14px;
     }
-    .photo-upload-area:active { border-color: #4a90d9; background: #eef6ff; }
+    .photo-upload-area:active { border-color: #dd6a12; background: #fff4ea; }
     .photo-upload-area p { font-size: 14px; color: #7a8a9a; margin-top: 8px; }
     .photo-upload-icon { font-size: 36px; }
     #photo-input { display: none; }
@@ -519,7 +519,7 @@
       display: flex; align-items: center; justify-content: center;
     }
     .photo-uploading {
-      font-size: 12px; color: #4a90d9;
+      font-size: 12px; color: #c2570c;
       text-align: center; padding: 6px 0;
     }
 
@@ -544,12 +544,12 @@
     .gh-select-btns { display: flex; flex-direction: column; gap: 10px; }
     .gh-select-btn {
       width: 100%; padding: 14px;
-      background: #f0f6ff; border: 1.5px solid #c0d4f0;
+      background: #fff4ea; border: 1.5px solid #f3c9a6;
       border-radius: 12px; font-size: 15px; font-weight: bold;
       color: #2c3e50; font-family: inherit; cursor: pointer;
       text-align: left; transition: all 0.12s;
     }
-    .gh-select-btn:active { background: #4a90d9; color: white; border-color: #4a90d9; }
+    .gh-select-btn:active { background: #dd6a12; color: white; border-color: #dd6a12; }
   </style>
 </head>
 <body>
@@ -1182,15 +1182,15 @@
       block.dataset.residentName = residentName;
       block.innerHTML = `
         <div class="bowel-header" style="display:flex;justify-content:space-between;align-items:center;margin-top:10px">
-          <div class="bowel-label" style="font-size:13px;font-weight:bold;color:#4a90d9">排便状況</div>
-          <button type="button" class="bowel-copy-btn" style="display:none;padding:4px 10px;font-size:12px;background:#fff;color:#4a90d9;border:1px solid #4a90d9;border-radius:6px">コピー</button>
+          <div class="bowel-label" style="font-size:13px;font-weight:bold;color:#c2570c">排便状況</div>
+          <button type="button" class="bowel-copy-btn" style="display:none;padding:4px 10px;font-size:12px;background:#fff;color:#c2570c;border:1px solid #dd6a12;border-radius:6px">コピー</button>
         </div>
         <label class="bowel-none-row" style="display:flex;align-items:center;gap:6px;font-size:13px;margin:6px 0">
           <input type="checkbox" class="bowel-none-checkbox">排便なし
         </label>
         <div class="bowel-none-error" style="display:none;color:#e74c3c;font-size:12px;margin:-4px 0 6px">保存できませんでした。通信を確認してもう一度お試しください</div>
         <div class="bowel-rows"></div>
-        <button type="button" class="bowel-add-btn" style="margin-top:6px;padding:8px 14px;background:#fff;color:#4a90d9;border:1px dashed #4a90d9;border-radius:8px" disabled>＋ 排便を追加</button>
+        <button type="button" class="bowel-add-btn" style="margin-top:6px;padding:8px 14px;background:#fff;color:#c2570c;border:1px dashed #dd6a12;border-radius:8px" disabled>＋ 排便を追加</button>
         <div class="bowel-unavailable-msg" style="display:none;font-size:12px;color:#e74c3c;margin-top:6px">排便記録を読み込めませんでした。再読み込みしてください</div>
       `;
       container.appendChild(block);
@@ -1583,8 +1583,8 @@
           </label>`).join('');
       block.innerHTML = `
         <div class="patrol-header" style="display:flex;justify-content:space-between;align-items:center;margin-top:10px">
-          <div class="patrol-label" style="font-size:13px;font-weight:bold;color:#4a90d9">居室確認</div>
-          <button type="button" class="patrol-copy-btn" style="display:none;padding:4px 10px;font-size:12px;background:#fff;color:#4a90d9;border:1px solid #4a90d9;border-radius:6px">コピー</button>
+          <div class="patrol-label" style="font-size:13px;font-weight:bold;color:#c2570c">居室確認</div>
+          <button type="button" class="patrol-copy-btn" style="display:none;padding:4px 10px;font-size:12px;background:#fff;color:#c2570c;border:1px solid #dd6a12;border-radius:6px">コピー</button>
         </div>
         <div class="patrol-slots" style="display:flex;flex-wrap:wrap;gap:0 8px;margin:2px 0">${boxes}</div>
         <div class="patrol-error" style="display:none;color:#e74c3c;font-size:12px;margin:0 0 6px">保存できませんでした。通信を確認してもう一度お試しください</div>
