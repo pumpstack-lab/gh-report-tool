@@ -638,6 +638,8 @@
   </div>
 
   <script>
+    // 委託料の勤務種別を記録しない職員区分（A職員＝法人から給与・派遣＝派遣会社へ支払い。2026-10-26 派遣を追加）
+    const NO_WORKTYPE_STAFF = new Set(['a_staff', 'haken']);
     const GH_NAMES = [
       'こもれびホーム３−２',
       'こもれびホーム４',
@@ -1977,7 +1979,7 @@
       box.innerHTML = '';
       workerRows.forEach((row, idx) => {
         const staff = staffById(row.staff_id);
-        const isA = staff && staff.staff_type === 'a_staff';
+        const isA = staff && NO_WORKTYPE_STAFF.has(staff.staff_type);
         const div = document.createElement('div');
         div.style.cssText = 'display:flex;gap:6px;align-items:center;margin-bottom:8px;flex-wrap:wrap';
         const staffSel = document.createElement('select');
@@ -1986,12 +1988,14 @@
           + '<optgroup label="世話人">' + staffList.filter(s => s.staff_type === 'sewanin')
             .map(s => `<option value="${s.id}">${s.last_name} ${s.first_name}</option>`).join('') + '</optgroup>'
           + '<optgroup label="A職員（法人職員）">' + staffList.filter(s => s.staff_type === 'a_staff')
+            .map(s => `<option value="${s.id}">${s.last_name} ${s.first_name}</option>`).join('') + '</optgroup>'
+          + '<optgroup label="派遣">' + staffList.filter(s => s.staff_type === 'haken')
             .map(s => `<option value="${s.id}">${s.last_name} ${s.first_name}</option>`).join('') + '</optgroup>';
         staffSel.value = row.staff_id || '';
         staffSel.addEventListener('change', () => {
           row.staff_id = staffSel.value || null;
           const s = staffById(row.staff_id);
-          if (s && s.staff_type === 'a_staff') row.work_type = null;
+          if (s && NO_WORKTYPE_STAFF.has(s.staff_type)) row.work_type = null;
           renderWorkerRows();
           scheduleAutoSave();
         });
@@ -2039,7 +2043,7 @@
         if (isA) {
           const note = document.createElement('div');
           note.style.cssText = 'width:100%;font-size:11px;color:#888';
-          note.textContent = 'A職員（法人職員）は法人から給与が支払われるため、委託料の勤務種別は記録しません';
+          note.textContent = 'A職員（法人職員）・派遣は委託料の対象外のため、勤務種別は記録しません';
           div.appendChild(note);
         }
         const warn = workerWarning(row);
@@ -2099,7 +2103,7 @@
         .map(r => {
           const s = staffById(r.staff_id);
           return { staff_id: r.staff_id, name: `${s.last_name} ${s.first_name}`.trim(),
-                   staff_type: s.staff_type, work_type: s.staff_type === 'a_staff' ? null : r.work_type };
+                   staff_type: s.staff_type, work_type: NO_WORKTYPE_STAFF.has(s.staff_type) ? null : r.work_type };
         });
       const shortageData = shortageItems
         .filter(item => item.text.trim())
