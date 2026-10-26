@@ -828,7 +828,7 @@
         '#shortage-list input, #shortage-list .btn-remove-shortage, #btn-add-shortage, ' +
         '.diaper-stepper-btn, #photo-upload-area, ' +
         '.bowel-add-btn, .bowel-none-checkbox, .bowel-row-del-btn, ' +
-        '.bowel-time-input, .bowel-stool-select, .bowel-amount-select, .bowel-place-select, ' +
+        '.bowel-hour-select, .bowel-minute-select, .bowel-stool-select, .bowel-amount-select, .bowel-place-select, ' +
         '.patrol-checkbox, .patrol-copy-btn'
       ).forEach(el => {
         // 見回りは読み込みが終わっていない/失敗している間は有効化しない（renderPatrolBlock と同じ条件）
@@ -1147,7 +1147,7 @@
           // 未完成の下書きを全行復元する（ネイト指摘: タブが落ちても消えない）
           draftRows.forEach(draft => {
             bowelRowsFor(residentId).push({ id: null, kind: 'record',
-              recorded_at: draft.recorded_at, stool_type: draft.stool_type,
+              recorded_at: draft.recorded_at, hh: draft.hh, mm: draft.mm, stool_type: draft.stool_type,
               amount: draft.amount, place: draft.place });
           });
         }
@@ -1219,7 +1219,9 @@
       recordRows.forEach((row, idx) => renderBowelRow(block, rowsContainer, row, idx));
 
       const addBtn = block.querySelector('.bowel-add-btn');
-      addBtn.disabled = !bowelLoadedForDate || !!noneRow;
+      // 2026-10-26: 「排便なし」が付いていても押せる（押すと排便なしを外して行を足す）。
+      // 以前は無効化しており、夜勤が付けた後に排便があった日に「押しても反応しない」と現場で詰まった
+      addBtn.disabled = !bowelLoadedForDate;
 
       const copyBtn = block.querySelector('.bowel-copy-btn');
       const copyText = BowelCopy.buildBowelCopyText(residentName, recordRows);
@@ -1242,6 +1244,37 @@
       if (noneErrEl) noneErrEl.style.display = 'none';
     }
 
+    // 2026-10-26 オーナー指示: 時刻は10分刻み（1分刻みの input type=time は選びにくい）。
+    // 時と分の2つのプルダウンにする。保存値は従来どおり 'HH:MM'。
+    // 10分刻みでない既存の記録（例 13:15）は、その分を選択肢に足して表示を保つ。
+    // 片方だけ選んだ途中の状態は row.hh / row.mm に持つ（再描画・下書き復元で消えないように）。
+    function bowelTimeSelectsHtml(row) {
+      const [rh, rm] = (row.recorded_at || '').split(':');
+      const ok = (v, max) => (/^\d{2}$/.test(v || '') && Number(v) <= max ? v : '');
+      const h = ok(row.hh !== undefined ? row.hh : rh, 23);
+      const m = ok(row.mm !== undefined ? row.mm : rm, 59);
+      const pad = n => String(n).padStart(2, '0');
+      const minutes = ['00', '10', '20', '30', '40', '50'];
+      if (m && !minutes.includes(m)) minutes.push(m), minutes.sort();
+      const sel = 'padding:6px;border:1px solid #ddd;border-radius:6px;font-size:16px';
+      return `
+        <select class="bowel-hour-select" style="${sel}">
+          <option value="">時</option>
+          ${Array.from({ length: 24 }, (_, i) => pad(i)).map(x => `<option value="${x}"${x === h ? ' selected' : ''}>${x}</option>`).join('')}
+        </select>
+        <span>:</span>
+        <select class="bowel-minute-select" style="${sel}">
+          <option value="">分</option>
+          ${minutes.map(x => `<option value="${x}"${x === m ? ' selected' : ''}>${x}</option>`).join('')}
+        </select>`;
+    }
+
+    function bowelTimeValue(rowEl) {
+      const h = rowEl.querySelector('.bowel-hour-select').value;
+      const m = rowEl.querySelector('.bowel-minute-select').value;
+      return h && m ? `${h}:${m}` : null;
+    }
+
     function renderBowelRow(block, rowsContainer, row, idx) {
       const residentId = block.dataset.residentId;
       const rowEl = document.createElement('div');
@@ -1250,7 +1283,7 @@
       rowEl.style.cssText = 'border:1px solid #eee;border-radius:8px;padding:8px;margin-bottom:8px';
       rowEl.innerHTML = `
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
-          <input type="time" class="bowel-time-input" value="${row.recorded_at || ''}" style="padding:6px;border:1px solid #ddd;border-radius:6px">
+          <span style="display:flex;align-items:center;gap:4px">${bowelTimeSelectsHtml(row)}</span>
           <button type="button" class="bowel-row-del-btn" style="min-width:36px;min-height:36px">✕</button>
         </div>
         <div style="display:flex;gap:6px;flex-wrap:wrap">
@@ -1273,7 +1306,9 @@
 
       function currentDraft() {
         return {
-          recorded_at: rowEl.querySelector('.bowel-time-input').value || null,
+          recorded_at: bowelTimeValue(rowEl),
+          hh: rowEl.querySelector('.bowel-hour-select').value,
+          mm: rowEl.querySelector('.bowel-minute-select').value,
           stool_type: rowEl.querySelector('.bowel-stool-select').value || null,
           amount: rowEl.querySelector('.bowel-amount-select').value || null,
           place: rowEl.querySelector('.bowel-place-select').value || null,
@@ -1325,7 +1360,7 @@
       const incomplete = bowelRowsFor(residentId)
         .filter(r => r.kind !== 'none')
         .filter(r => !(r.recorded_at && r.stool_type && r.amount && r.place))
-        .map(r => ({ recorded_at: r.recorded_at || null, stool_type: r.stool_type || null,
+        .map(r => ({ recorded_at: r.recorded_at || null, hh: r.hh, mm: r.mm, stool_type: r.stool_type || null,
           amount: r.amount || null, place: r.place || null }));
       saveBowelDraft(dateEl.value, residentId, incomplete);
     }
@@ -1367,6 +1402,12 @@
           return;
         }
         if (data && data[0]) row.id = data[0].id;
+        // 別の端末で後から「排便なし」が付いていたら外す（記録と両方残らないように）。
+        // 記録の保存が通ってから消す＝保存失敗で「排便なし」だけ消える事故を防ぐ（ネイト指摘）
+        const { error: noneDelErr } = await db.from('bowel_records').delete()
+          .eq('gh_num', payload.gh_num).eq('report_date', payload.report_date)
+          .eq('resident_id', payload.resident_id).eq('kind', 'none');
+        if (noneDelErr) console.error('bowel_records(none) cleanup failed:', noneDelErr.message);
       }
       clearBowelRowError(rowEl);
       Object.assign(row, draft, { kind: 'record' });
@@ -1394,7 +1435,41 @@
       const residentId = block.dataset.residentId;
       const residentName = block.dataset.residentName;
 
-      block.querySelector('.bowel-add-btn').addEventListener('click', () => {
+      let addBusy = false; // 排便なしの削除を待つ間の連打で行が2つ増えないように
+      block.querySelector('.bowel-add-btn').addEventListener('click', async () => {
+        if (addBusy || bowelLoadedForDate !== dateEl.value) return;
+        const noneRow = bowelRowsFor(residentId).find(r => r.kind === 'none');
+        if (noneRow) {
+          const dateAtClick = dateEl.value;
+          let error = null;
+          addBusy = true;
+          try {
+            // id が無い＝DB上の行を特定できない。行を足すと排便なしと記録が両方残るので赤字で止める
+            ({ error } = noneRow.id
+              ? await db.from('bowel_records').delete().eq('id', noneRow.id)
+              : { error: { message: 'none row has no id' } });
+          } catch (e) {
+            error = e;
+          } finally {
+            addBusy = false;
+          }
+          if (error) {
+            console.error('bowel_records(none) delete failed:', error.message);
+            block.querySelector('.bowel-none-error').style.display = '';
+            return; // 外せなかったので行は足さない（排便なしと記録が両方残るのを防ぐ）
+          }
+          // 削除の通信中に日付が切り替わったら、切替先の画面状態には書き込まない
+          if (bowelLoadedForDate !== dateAtClick || dateEl.value !== dateAtClick) return;
+          // 空と決め打ちしない＝別の端末が先に記録を入れていたら、それも出す
+          const { data: fresh, error: freshErr } = await db.from('bowel_records')
+            .select('id, resident_id, kind, recorded_at, stool_type, amount, place, sort_order')
+            .eq('gh_num', parseInt(ghNum)).eq('report_date', dateAtClick)
+            .eq('resident_id', parseInt(residentId, 10)).eq('kind', 'record')
+            .order('sort_order');
+          if (bowelLoadedForDate !== dateAtClick || dateEl.value !== dateAtClick) return;
+          bowelRecordsByResident[residentId] = (!freshErr && fresh) ? fresh.filter(r => r.kind === 'record') : [];
+          clearBowelDraft(dateAtClick, residentId); // 排便なしの間に残っていた古い下書きを持ち越さない
+        }
         bowelRowsFor(residentId).push({ id: null, kind: 'record', recorded_at: null, stool_type: null, amount: null, place: null });
         renderBowelRows(block);
       });
@@ -1404,7 +1479,25 @@
         if (bowelLoadedForDate !== dateEl.value) { e.target.checked = !e.target.checked; return; }
         const noneErrEl = block.querySelector('.bowel-none-error');
         const rows = bowelRowsFor(residentId);
+        const dateAtChange = dateEl.value;
         if (e.target.checked) {
+          // 別の端末で記録が入っていたら「排便なし」は付けずに、その記録を出す
+          // （2026-10-24 に記録と排便なしが両方入った実例あり）
+          const { data: existing, error: exErr } = await db.from('bowel_records')
+            .select('id, resident_id, kind, recorded_at, stool_type, amount, place, sort_order')
+            .eq('gh_num', parseInt(ghNum)).eq('report_date', dateEl.value)
+            .eq('resident_id', parseInt(residentId, 10)).eq('kind', 'record')
+            .order('sort_order');
+          if (bowelLoadedForDate !== dateAtChange || dateEl.value !== dateAtChange) {
+            e.target.checked = false; // 確認中に日付が切り替わった＝切替先の画面には書き込まない
+            return;
+          }
+          const existingRecords = (!exErr && existing) ? existing.filter(r => r.kind === 'record') : [];
+          if (existingRecords.length > 0) {
+            bowelRecordsByResident[residentId] = existingRecords;
+            renderBowelRows(block);
+            return;
+          }
           const { data, error } = await db.from('bowel_records').insert({
             gh_num: parseInt(ghNum), report_date: dateEl.value, resident_id: parseInt(residentId, 10),
             resident_name: residentName, kind: 'none',

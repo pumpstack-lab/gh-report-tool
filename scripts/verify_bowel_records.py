@@ -22,6 +22,12 @@ DATE = "2026-09-07"
 
 RESIDENTS = [{"id": 101, "name": "山田太郎", "gh_num": GH, "active": True, "sort_order": 1}]
 
+FAKE_SESSION = {
+    "access_token": "fake-token", "token_type": "bearer", "expires_in": 3600,
+    "expires_at": int(time.time()) + 3600, "refresh_token": "fake-refresh",
+    "user": {"id": "11111111-1111-1111-1111-111111111111", "email": "staff@example.com"},
+}
+
 results = []
 
 
@@ -29,6 +35,19 @@ def record(name, ok, detail=""):
     results.append((name, ok, detail))
     mark = "PASS" if ok else "FAIL"
     print(f"[{mark}] {name}" + (f" — {detail}" if detail else ""))
+
+
+def set_time(row, hhmm):
+    """時刻は時・分の2つのプルダウン（2026-10-26 10分刻みに変更）。"""
+    h, m = hhmm.split(":")
+    row.locator(".bowel-hour-select").select_option(h)
+    row.locator(".bowel-minute-select").select_option(m)
+
+
+def get_time(row):
+    h = row.locator(".bowel-hour-select").input_value()
+    m = row.locator(".bowel-minute-select").input_value()
+    return f"{h}:{m}" if h and m else ""
 
 
 def start_server():
@@ -117,6 +136,13 @@ def setup_routes(page, *, bowel_calls=None, bowel_rows=None,
             return
         route.fulfill(status=200, content_type="application/json", body="[]")
 
+    # 2026-09-09 以降はログイン必須（auth_gate）。偽のセッションを置いて通す（verify_sleep_records.py と同じ）
+    page.add_init_script(
+        "window.localStorage.setItem('sb-vqeoutrlvdydxenaspas-auth-token', "
+        + json.dumps(json.dumps(FAKE_SESSION)) + ");"
+    )
+    page.route("**/auth/v1/**", lambda r: r.fulfill(
+        status=200, content_type="application/json", body=json.dumps(FAKE_SESSION)))
     page.route("**/rest/v1/**", handle_rest)
     return bowel_calls
 
@@ -151,7 +177,7 @@ def case1_add_select_four_fields_saves(pw):
     page.wait_for_selector(".bowel-add-btn:not([disabled])", timeout=5000)
     page.locator(".bowel-add-btn").first.click()
     row = page.locator(".bowel-row").first
-    row.locator(".bowel-time-input").fill("08:00")
+    set_time(row, "08:00")
     row.locator(".bowel-stool-select").select_option("普通便")
     row.locator(".bowel-amount-select").select_option("中量")
     row.locator(".bowel-place-select").select_option("便器")
@@ -172,7 +198,7 @@ def case2_incomplete_row_not_saved(pw):
     page.wait_for_selector(".bowel-add-btn:not([disabled])", timeout=5000)
     page.locator(".bowel-add-btn").first.click()
     row = page.locator(".bowel-row").first
-    row.locator(".bowel-time-input").fill("08:00")  # 時間だけ入力・他は未選択
+    set_time(row, "08:00")  # 時間だけ入力・他は未選択
     page.wait_for_timeout(300)
     posts = [c for c in calls if c["method"] == "POST"]
     err_visible = row.locator(".bowel-row-error").is_visible()
@@ -270,10 +296,10 @@ def case7_incomplete_row_survives_sibling_save(pw):
     add_btn.click()
     rows = page.locator(".bowel-row")
     # 2行目を未完成のまま入力（下書きとして残るはず）
-    rows.nth(1).locator(".bowel-time-input").fill("09:30")
+    set_time(rows.nth(1), "09:30")
     page.wait_for_timeout(150)
     # 1行目を完成させて保存させる
-    rows.nth(0).locator(".bowel-time-input").fill("08:00")
+    set_time(rows.nth(0), "08:00")
     rows.nth(0).locator(".bowel-stool-select").select_option("普通便")
     rows.nth(0).locator(".bowel-amount-select").select_option("中量")
     rows.nth(0).locator(".bowel-place-select").select_option("便器")
@@ -286,7 +312,7 @@ def case7_incomplete_row_survives_sibling_save(pw):
     page2.wait_for_selector(".bowel-add-btn:not([disabled])", timeout=5000)
     page2.wait_for_timeout(300)
     row_count = page2.locator(".bowel-row").count()
-    time_inputs = [page2.locator(".bowel-time-input").nth(i).input_value() for i in range(row_count)]
+    time_inputs = [get_time(page2.locator(".bowel-row").nth(i)) for i in range(row_count)]
     ok = row_count == 2 and "09:30" in time_inputs and "08:00" in time_inputs
     record("1行目保存後も2行目の未完成下書きが残る", ok, f"row_count={row_count} time_inputs={time_inputs}")
     browser.close()
@@ -307,7 +333,7 @@ def case8_draft_restored_alongside_saved_rows(pw):
     page.wait_for_selector(".bowel-add-btn:not([disabled])", timeout=5000)
     page.locator(".bowel-add-btn").first.click()
     rows = page.locator(".bowel-row")
-    rows.nth(1).locator(".bowel-time-input").fill("14:00")  # 未完成のまま
+    set_time(rows.nth(1), "14:00")  # 未完成のまま
     page.wait_for_timeout(300)
 
     page2 = context.new_page()
@@ -316,7 +342,7 @@ def case8_draft_restored_alongside_saved_rows(pw):
     page2.wait_for_selector(".bowel-add-btn:not([disabled])", timeout=5000)
     page2.wait_for_timeout(300)
     row_count = page2.locator(".bowel-row").count()
-    time_inputs = [page2.locator(".bowel-time-input").nth(i).input_value() for i in range(row_count)]
+    time_inputs = [get_time(page2.locator(".bowel-row").nth(i)) for i in range(row_count)]
     ok = row_count == 2 and "08:00" in time_inputs and "14:00" in time_inputs
     record("保存済み1件＋未完成の下書き1件が両方復元される", ok, f"row_count={row_count} time_inputs={time_inputs}")
     browser.close()
@@ -370,7 +396,7 @@ def case10_write_failure_shows_error_and_restores_deleted_row(pw):
     page.wait_for_selector(".bowel-add-btn:not([disabled])", timeout=5000)
     page.locator(".bowel-add-btn").first.click()
     row = page.locator(".bowel-row").first
-    row.locator(".bowel-time-input").fill("08:00")
+    set_time(row, "08:00")
     row.locator(".bowel-stool-select").select_option("普通便")
     row.locator(".bowel-amount-select").select_option("中量")
     row.locator(".bowel-place-select").select_option("便器")
@@ -492,6 +518,131 @@ def screenshot_widths(pw):
     browser.close()
 
 
+def _open(pw, **kw):
+    browser = pw.chromium.launch()
+    page = browser.new_page()
+    calls = setup_routes(page, **kw)
+    page.goto(f"{BASE}/report.html?gh={GH}&date={DATE}", wait_until="domcontentloaded")
+    page.wait_for_selector(".bowel-add-btn:not([disabled])", timeout=5000)
+    return browser, page, calls
+
+
+NONE_ROW = {"id": 77, "resident_id": 101, "kind": "none", "recorded_at": None,
+            "stool_type": None, "amount": None, "place": None, "sort_order": 0}
+
+
+def case13_add_button_clears_none(pw):
+    print("\n--- ケース⑬: 「排便なし」が付いていても追加ボタンが押せ、押すと排便なしを外して行が出る ---")
+    browser, page, calls = _open(pw, bowel_rows=[dict(NONE_ROW)])
+    checked_before = page.locator(".bowel-none-checkbox").first.is_checked()
+    page.locator(".bowel-add-btn").first.click()
+    page.wait_for_selector(".bowel-row", timeout=3000)
+    dels = [c for c in calls if c["method"] == "DELETE" and "id=eq.77" in c["url"]]
+    ok = (checked_before and len(dels) == 1
+          and not page.locator(".bowel-none-checkbox").first.is_checked()
+          and page.locator(".bowel-row").count() == 1)
+    record("排便なしの日も追加でき、排便なしが外れる", ok,
+           f"checked_before={checked_before} dels={len(dels)} rows={page.locator('.bowel-row').count()}")
+    browser.close()
+    return ok
+
+
+def case14_none_delete_failure_adds_no_row(pw):
+    print("\n--- ケース⑭: 排便なしを外せなかったら行は足さず赤字を出す ---")
+    browser, page, calls = _open(pw, bowel_rows=[dict(NONE_ROW)], fail_delete=True)
+    page.locator(".bowel-add-btn").first.click()
+    page.wait_for_timeout(500)
+    ok = (page.locator(".bowel-row").count() == 0
+          and page.locator(".bowel-none-error").first.is_visible()
+          and page.locator(".bowel-none-checkbox").first.is_checked())
+    record("削除失敗で行が増えず赤字・排便なしは残る", ok)
+    browser.close()
+    return ok
+
+
+def case15_time_is_10min_and_keeps_old_minutes(pw):
+    print("\n--- ケース⑮: 分は10分刻み・既存の13:15はそのまま表示 ---")
+    old = {"id": 5, "resident_id": 101, "kind": "record", "recorded_at": "13:15",
+           "stool_type": "普通便", "amount": "中量", "place": "便器", "sort_order": 0}
+    browser, page, calls = _open(pw, bowel_rows=[old])
+    page.wait_for_selector(".bowel-row", timeout=3000)
+    shown = get_time(page.locator(".bowel-row").first)
+    page.locator(".bowel-add-btn").first.click()
+    new_row = page.locator(".bowel-row").nth(1)
+    mins = new_row.locator(".bowel-minute-select option").all_inner_texts()
+    hours = new_row.locator(".bowel-hour-select option").count()
+    ok = shown == "13:15" and mins == ["分", "00", "10", "20", "30", "40", "50"] and hours == 25
+    record("新しい行の分は00〜50の6択・時は24択・既存13:15は崩れない", ok,
+           f"shown={shown} mins={mins} hours={hours}")
+    browser.close()
+    return ok
+
+
+def case16_none_not_set_when_other_device_recorded(pw):
+    print("\n--- ケース⑯: 別の端末で記録が入っていたら「排便なし」は付けずに記録を出す ---")
+    rows = []
+    browser, page, calls = _open(pw, bowel_rows=rows)
+    # 画面を開いた後に別の端末で記録が入った状態を作る
+    rows.append({"id": 9, "resident_id": 101, "kind": "record", "recorded_at": "07:10",
+                 "stool_type": "軟便", "amount": "少量", "place": "パッド内", "sort_order": 0})
+    page.locator(".bowel-none-checkbox").first.check(force=True)
+    page.wait_for_timeout(500)
+    none_posts = [c for c in calls if c["method"] == "POST" and (c["body"] or {}).get("kind") == "none"]
+    ok = (len(none_posts) == 0
+          and not page.locator(".bowel-none-checkbox").first.is_checked()
+          and get_time(page.locator(".bowel-row").first) == "07:10")
+    record("他端末の記録があれば排便なしをPOSTせず記録を表示", ok, f"none_posts={len(none_posts)}")
+    browser.close()
+    return ok
+
+
+def case17_partial_time_survives_rerender_and_reload(pw):
+    print("\n--- ケース⑰: 時だけ選んだ状態が、追加ボタン（再描画）とリロードで消えない ---")
+    browser, page, calls = _open(pw)
+    page.locator(".bowel-add-btn").first.click()
+    page.locator(".bowel-row").first.locator(".bowel-hour-select").select_option("14")
+    page.locator(".bowel-add-btn").first.click()  # 再描画が走る
+    after_rerender = page.locator(".bowel-row").first.locator(".bowel-hour-select").input_value()
+    page.reload(wait_until="domcontentloaded")
+    page.wait_for_selector(".bowel-row", timeout=5000)
+    after_reload = page.locator(".bowel-row").first.locator(".bowel-hour-select").input_value()
+    posts = [c for c in calls if c["method"] == "POST"]
+    ok = after_rerender == "14" and after_reload == "14" and len(posts) == 0
+    record("時だけの途中状態が再描画・リロード後も残る", ok,
+           f"after_rerender={after_rerender} after_reload={after_reload} posts={len(posts)}")
+    browser.close()
+    return ok
+
+
+def case18_insert_failure_keeps_none(pw):
+    print("\n--- ケース⑱: 記録の保存に失敗したら「排便なし」の削除は飛ばない ---")
+    browser, page, calls = _open(pw, fail_write=True)
+    page.locator(".bowel-add-btn").first.click()
+    row = page.locator(".bowel-row").first
+    set_time(row, "08:00")
+    row.locator(".bowel-stool-select").select_option("普通便")
+    row.locator(".bowel-amount-select").select_option("中量")
+    row.locator(".bowel-place-select").select_option("便器")
+    page.wait_for_timeout(400)
+    none_dels = [c for c in calls if c["method"] == "DELETE" and "kind=eq.none" in c["url"]]
+    ok = len(none_dels) == 0 and row.locator(".bowel-row-error").is_visible()
+    record("保存失敗時は排便なしを消さない", ok, f"none_dels={len(none_dels)}")
+    browser.close()
+    return ok
+
+
+def case19_bad_time_value_is_not_injected(pw):
+    print("\n--- ケース⑲: 形式外の recorded_at は HTML に入らない（XSS 防止） ---")
+    bad = {"id": 6, "resident_id": 101, "kind": "record", "recorded_at": '1:"><img id=pwn src=x>',
+           "stool_type": "普通便", "amount": "中量", "place": "便器", "sort_order": 0}
+    browser, page, calls = _open(pw, bowel_rows=[bad])
+    page.wait_for_selector(".bowel-row", timeout=3000)
+    ok = page.locator("#pwn").count() == 0 and get_time(page.locator(".bowel-row").first) == ""
+    record("形式外の時刻は空扱いで要素が注入されない", ok)
+    browser.close()
+    return ok
+
+
 def main():
     server = start_server()
     try:
@@ -508,6 +659,13 @@ def main():
             r10 = case10_write_failure_shows_error_and_restores_deleted_row(pw)
             r11 = case11_update_body_excludes_report_date(pw)
             r12 = case12_copy_fallback_textarea_is_dismissable_and_clears_on_rerender(pw)
+            r13 = case13_add_button_clears_none(pw)
+            r14 = case14_none_delete_failure_adds_no_row(pw)
+            r15 = case15_time_is_10min_and_keeps_old_minutes(pw)
+            r16 = case16_none_not_set_when_other_device_recorded(pw)
+            r17 = case17_partial_time_survives_rerender_and_reload(pw)
+            r18 = case18_insert_failure_keeps_none(pw)
+            r19 = case19_bad_time_value_is_not_injected(pw)
             screenshot_widths(pw)
     finally:
         server.terminate()
@@ -520,8 +678,8 @@ def main():
         print(f"[{mark}] {name}")
         if not ok:
             all_ok = False
-    labels = ["①", "②", "③", "④", "⑤", "⑥", "⑦", "⑧", "⑨", "⑩", "⑪", "⑫"]
-    rs = [r1, r2, r3, r4, r5, r6, r7, r8, r9, r10, r11, r12]
+    labels = ["①", "②", "③", "④", "⑤", "⑥", "⑦", "⑧", "⑨", "⑩", "⑪", "⑫", "⑬", "⑭", "⑮", "⑯", "⑰", "⑱", "⑲"]
+    rs = [r1, r2, r3, r4, r5, r6, r7, r8, r9, r10, r11, r12, r13, r14, r15, r16, r17, r18, r19]
     print("\n" + " / ".join(f"{lb}: {'PASS' if r else 'FAIL'}" for lb, r in zip(labels, rs)))
     sys.exit(0 if all_ok else 1)
 
