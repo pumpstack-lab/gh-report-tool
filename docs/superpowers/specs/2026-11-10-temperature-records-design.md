@@ -24,10 +24,10 @@ short_stay_key text    null             -- '__short_stay_1__' / '__short_stay_2_
 resident_name text     not null         -- 表示用スナップショット（短期入所は入力欄の名前）
 slot          text     not null check (slot in ('evening','morning'))
 temp_c        numeric(3,1) not null check (temp_c between 35.0 and 42.0)
+subject_key   text generated always as (coalesce(resident_id::text, short_stay_key)) stored not null
 created_at / updated_at timestamptz
 制約: (resident_id is not null) <> (short_stay_key is not null)  -- どちらか片方
-一意: (gh_num, report_date, resident_id, slot)      where resident_id is not null
-一意: (gh_num, report_date, short_stay_key, slot)   where short_stay_key is not null
+一意: (gh_num, report_date, subject_key, slot)   -- 1本（部分一意索引2本にすると PostgREST の upsert(onConflict) が arbiter にできず本番で42P10になるため、生成列で1本にまとめる）
 RLS: authenticated_all（排便・見回りと同じ。anon には開けない）
 ```
 

@@ -11,6 +11,9 @@ create table if not exists temperature_records (
   report_date    date not null,
   resident_id    bigint references residents(id),
   short_stay_key text,                                  -- '__short_stay_1__' / '__short_stay_2__'
+  -- PostgRESTのupsert(onConflict)はwhere付きの部分一意索引をarbiterにできず本番で42P10になるため、
+  -- resident_id/short_stay_keyのどちらかを1本の式にまとめた生成列で一意索引を作る。
+  subject_key    text generated always as (coalesce(resident_id::text, short_stay_key)) stored not null,
   resident_name  text not null,                         -- 表示用スナップショット
   slot           text not null check (slot in ('evening','morning')),
   temp_c         numeric(3,1) not null check (temp_c between 35.0 and 42.0),
@@ -18,10 +21,8 @@ create table if not exists temperature_records (
   updated_at     timestamptz not null default now(),
   constraint temperature_records_subject check ((resident_id is not null) <> (short_stay_key is not null))
 );
-create unique index if not exists temperature_records_resident_uniq
-  on temperature_records (gh_num, report_date, resident_id, slot) where resident_id is not null;
-create unique index if not exists temperature_records_short_stay_uniq
-  on temperature_records (gh_num, report_date, short_stay_key, slot) where short_stay_key is not null;
+create unique index if not exists temperature_records_uniq
+  on temperature_records (gh_num, report_date, subject_key, slot);
 create index if not exists temperature_records_date_idx on temperature_records (report_date, gh_num);
 alter table temperature_records enable row level security;
 drop policy if exists authenticated_all on temperature_records;

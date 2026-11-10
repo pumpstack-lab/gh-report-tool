@@ -1166,14 +1166,12 @@
       const payload = { gh_num: parseInt(ghNum), report_date: dateEl.value, slot, temp_c: n.value, resident_name: nameFn(), updated_at: new Date().toISOString(),
         resident_id: isShortStay ? null : parseInt(subject, 10), short_stay_key: isShortStay ? subject : null };
       const { data, error } = await db.from('temperature_records')
-        .upsert(payload, { onConflict: isShortStay ? 'gh_num,report_date,short_stay_key,slot' : 'gh_num,report_date,resident_id,slot' })
+        .upsert(payload, { onConflict: 'gh_num,report_date,subject_key,slot' })
         .select('id, temp_c').single();
       if (error) { errEl.textContent = '保存できませんでした。通信を確認してもう一度お試しください'; errEl.style.display = ''; refreshTemperatureRow(row); return; }
       tempRecords[key] = { id: data.id, temp_c: Number(data.temp_c) };
       refreshTemperatureRow(row);
     }
-    // ⚠️ 部分一意インデックス（where付き）への onConflict が本番で400になる場合は、
-    // upsertをやめ prev があれば update().eq('id', prev.id)、無ければ insert() にする。
     const BOWEL_DRAFT_KEY_PREFIX = 'bowel_draft_';  // localStorage: `${prefix}${ghNum}_${dateISO}_${residentId}`
 
     function bowelDraftKey(dateISO, residentId) {

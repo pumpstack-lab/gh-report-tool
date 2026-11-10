@@ -194,11 +194,17 @@ def case1_input_and_save(pw):
     writes = [c for c in calls if c["method"] in ("POST", "PATCH")]
     ok_count = len(writes) == 1
     body = writes[0]["body"] if writes else {}
+    url = writes[0]["url"] if writes else ""
     ok_body = (body.get("slot") == "evening" and body.get("temp_c") == 36.5
                and body.get("resident_id") == 101 and body.get("report_date") == DATE)
-    record("書き込みが1本・内容が正しい", ok_count and ok_body, json.dumps(body, ensure_ascii=False))
+    # 部分一意索引2本ではなく生成列subject_keyの1本の一意索引をarbiterにする（本番42P10対策）
+    ok_conflict = "on_conflict=gh_num%2Creport_date%2Csubject_key%2Cslot" in url
+    ok_no_subject_key_in_payload = "subject_key" not in body  # 生成列なのでpayloadには入れない
+    ok = ok_count and ok_body and ok_conflict and ok_no_subject_key_in_payload
+    record("書き込みが1本・内容が正しい・on_conflictがsubject_key1本", ok,
+           f"url={url} body={json.dumps(body, ensure_ascii=False)}")
     browser.close()
-    return ok_count and ok_body
+    return ok
 
 
 def case2_same_value_no_write(pw):
@@ -303,10 +309,12 @@ def case6_short_stay(pw):
     page.wait_for_timeout(300)
     writes = [c for c in calls if c["method"] in ("POST", "PATCH")]
     body = writes[0]["body"] if writes else {}
+    url = writes[0]["url"] if writes else ""
+    ok_conflict = "on_conflict=gh_num%2Creport_date%2Csubject_key%2Cslot" in url
     ok = (len(writes) == 1 and body.get("short_stay_key") == "__short_stay_1__"
           and body.get("resident_id") is None and body.get("resident_name") == "検証太郎"
-          and body.get("slot") == "morning" and body.get("temp_c") == 36.8)
-    record("短期入所枠の保存内容が正しい", ok, json.dumps(body, ensure_ascii=False))
+          and body.get("slot") == "morning" and body.get("temp_c") == 36.8 and ok_conflict)
+    record("短期入所枠の保存内容が正しい・on_conflictがsubject_key1本", ok, f"url={url} body={json.dumps(body, ensure_ascii=False)}")
     browser.close()
     return ok
 
