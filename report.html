@@ -1152,6 +1152,12 @@
       const errEl = row.querySelector('.temp-error');
       errEl.style.display = 'none';
       if (tempLoadedForDate !== dateEl.value) { refreshTemperatureRow(row); return; } // 日付切替の隙間で別日付に書かない
+      // type=numberは不正な入力（'36e'等）だと value が '' になり空=削除の経路に入ってしまうため、
+      // badInput を先に見て既存値を黙って消さないようにする。
+      if (inp.validity && inp.validity.badInput) {
+        errEl.textContent = TemperatureLogic.RANGE_ERROR; errEl.style.display = '';
+        return;
+      }
       const n = TemperatureLogic.normalizeTemp(inp.value);
       if (n.error) { errEl.textContent = n.error; errEl.style.display = ''; return; } // 保存しない・値は欄に残す
       const slot = inp.dataset.slot, key = tempKey(subject, slot), prev = tempRecords[key];

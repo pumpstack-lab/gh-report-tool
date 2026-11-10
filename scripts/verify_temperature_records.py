@@ -345,6 +345,32 @@ def case7_disabled_during_load_no_write(pw):
     return ok
 
 
+def case9_bad_input_does_not_delete(pw):
+    print("\n--- ケース9: 既存値36.5の欄に badInput になる入力（'36e' 等）→ DELETE 0本・エラー文表示 ---")
+    browser = pw.chromium.launch()
+    page = new_page(browser)
+    temp_rows = [{"id": 803, "resident_id": 101, "short_stay_key": None, "slot": "evening", "temp_c": 36.5}]
+    calls = setup_routes(page, temp_rows=temp_rows)
+    goto_loaded(page)
+    row = first_resident_row(page)
+    inp = row.locator('.temp-input[data-slot="evening"]')
+    ok_prefill = inp.input_value() == "36.5"
+    inp.click()
+    inp.evaluate("el => el.select()")
+    page.keyboard.type("36e")  # type=numberで badInput になる入力（value は '' になる）
+    ok_bad_input = inp.evaluate("el => el.validity.badInput")
+    inp.dispatch_event("change")
+    page.wait_for_timeout(300)
+    writes = [c for c in calls if c["method"] in ("POST", "PATCH", "DELETE")]
+    err = row.locator(".temp-error")
+    err_visible = err.is_visible()
+    ok = ok_prefill and ok_bad_input and len(writes) == 0 and err_visible
+    record("badInputは保存0本・エラー文表示（既存値を黙って消さない）", ok,
+           f"prefill={ok_prefill} badInput={ok_bad_input} writes={len(writes)} err_visible={err_visible}")
+    browser.close()
+    return ok
+
+
 def case8_load_failure_unavailable(pw):
     print("\n--- ケース8: temperature_records GETが500 → 欄disabled・.temp-unavailable表示・本文は使える ---")
     browser = pw.chromium.launch()
@@ -400,6 +426,7 @@ def main():
             r6 = case6_short_stay(pw)
             r7 = case7_disabled_during_load_no_write(pw)
             r8 = case8_load_failure_unavailable(pw)
+            r9 = case9_bad_input_does_not_delete(pw)
             screenshot_widths(pw)
     finally:
         server.terminate()
@@ -412,8 +439,8 @@ def main():
         print(f"[{mark}] {name}")
         if not ok:
             all_ok = False
-    labels = ["ケース1", "ケース2", "ケース3", "ケース4", "ケース5", "ケース6", "ケース7", "ケース8"]
-    rs = [r1, r2, r3, r4, r5, r6, r7, r8]
+    labels = ["ケース1", "ケース2", "ケース3", "ケース4", "ケース5", "ケース6", "ケース7", "ケース8", "ケース9"]
+    rs = [r1, r2, r3, r4, r5, r6, r7, r8, r9]
     print("\n" + " / ".join(f"{l}: {'PASS' if r else 'FAIL'}" for l, r in zip(labels, rs)))
     sys.exit(0 if all_ok else 1)
 
