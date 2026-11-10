@@ -10,7 +10,7 @@
 
 - 入れ方＝数字を打つ欄 2 つ（夕・朝）。小数 1 桁。スマホは数字キーボード
 - **37.5 以上は赤**（欄の枠と数字）
-- **「朝」は日報の日付の翌朝**。保存は日報の日付で持ち、月の記録では翌日の行に「朝」として出す
+- **1 枚の日報に「夕」と「朝」**＝夜勤 1 人が勤務中に 2 回入れる。日報の日付は管理画面の決まりどおり「朝の日付」（10/26 確定・見出し「10/4 夜 → 10/5 朝」＝10/5 の日報）。よって 10/5 の日報の「夕」＝10/4 の夜・「朝」＝10/5 の朝。**日付の置き換えは不要**（月の記録では 10/5 の行に夕・朝をそのまま出す）
 - 短期入所①②の枠にも同じ欄。名簿の利用者ではないので月の記録には出ない（日報で見返す）
 - 夜勤の手数＝数字を打つだけ。ボタン・選択・保存操作はなし（欄を離れたら保存）
 
@@ -18,7 +18,7 @@
 
 ```
 gh_num        integer  not null
-report_date   date     not null         -- 日報の日付（朝も同じ日付で持つ）
+report_date   date     not null         -- 日報の日付（＝朝の日付。夕は前夜）
 resident_id   bigint   null references residents(id)   -- 短期入所は null
 short_stay_key text    null             -- '__short_stay_1__' / '__short_stay_2__'（利用者は null）
 resident_name text     not null         -- 表示用スナップショット（短期入所は入力欄の名前）
@@ -42,7 +42,6 @@ RLS: authenticated_all（排便・見回りと同じ。anon には開けない�
 - 判定（純粋関数 `scripts/temperature_logic.js`・node テスト）
   - `normalizeTemp(text)` → 35.0〜42.0 の小数 1 桁なら数値、空なら null、それ以外は `{error}`
   - `isFever(temp)` → temp >= 37.5
-  - `morningDisplayDate(reportDateISO)` → 翌日の ISO
 - 範囲外・小数 2 桁は保存せず欄の下に「35.0〜42.0 で入れてください」（既存の赤帯は使わない・欄のそば）
 - 読み込み：`loadTemperatureRecords(dateISO)` を loadBowelRecords と同じ位置で待つ。`tempLoadedForDate` が日付と一致する時だけ欄が有効（排便・見回りと同じガード）。日付切替の隙間で別日付に書かない
 - 失敗：保存に失敗したら欄の横に「保存できませんでした」・値を元に戻す。読み込みに失敗したら欄は無効のまま「検温 読み込み失敗」
@@ -52,8 +51,8 @@ RLS: authenticated_all（排便・見回りと同じ。anon には開けない�
 ## 4. 管理画面「利用者別（月の記録）」（care-stack-absence）
 
 - `GET /report/api/person_month` に `temperature`（就寝・見回りと同じ `_optional_rows`・表が無ければ `temperature_state='missing'`）
-- 各日の行に `{"evening": 36.5, "morning_next": 36.8}` を持たせる。**朝は report_date の翌日の行に `morning` として表示**（API は report_date のまま返し、表示側で翌日に置く）
-- 画面：日付の行に「夕 36.5 ／ 朝 36.8」。37.5 以上は赤（既存の色定義を流用）。無い日は空
+- 各日の行に `"temperature": {"evening": 36.5, "morning": 36.8}`（無い方は null・両方無ければ null）。日付の置き換えなし
+- 画面：日付の行（見出し「10/4 夜 → 10/5 朝」）に「検温　夕 36.5 ／ 朝 36.8」。37.5 以上は赤（既存の `.is-error` 系の色を流用）。無い日は出さない
 
 ## 5. やらないこと
 
@@ -64,9 +63,9 @@ RLS: authenticated_all（排便・見回りと同じ。anon には開けない�
 
 ## 6. テスト
 
-- node：`temperature_logic.test.js`（正常／空／範囲外／小数 2 桁／37.4・37.5 の境目／翌朝の日付・月末またぎ）
+- node：`temperature_logic.test.js`（正常／空／範囲外／小数 2 桁／37.4・37.5 の境目）
 - Playwright 本番非接続 `scripts/verify_temperature_records.py`：入力→保存 1 本（upsert の中身）／打ち直し→上書き／空→削除／範囲外→保存 0 本＋注意文／37.5 で赤（getComputedStyle）／読み込み中は欄が無効／短期入所の枠で保存できる／3 幅スクショ
-- pytest（care-stack-absence）：person_month に temperature が乗る／表が無くても 200／翌朝の置き方
+- pytest（care-stack-absence）：person_month に temperature が乗る／表が無くても 200（temperature_state='missing'）
 
 ## 7. 本番反映の順
 
