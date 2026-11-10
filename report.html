@@ -11,6 +11,7 @@
   <script src="diaper-logic.js?v=3"></script>
   <script src="scripts/diaper_stock_label.js?v=2"></script>
   <script src="scripts/report_guard.js?v=2"></script>
+  <script src="scripts/temperature_logic.js?v=1"></script>
   <script src="scripts/report_patch.js?v=2"></script>
   <script src="scripts/save_retry.js?v=1"></script>
   <script src="scripts/report_draft.js?v=1"></script>
@@ -554,6 +555,14 @@
       text-align: left; transition: all 0.12s;
     }
     .gh-select-btn:active { background: #dd6a12; color: white; border-color: #dd6a12; }
+    .temp-row { display:flex; align-items:center; gap:8px; margin-top:10px; font-size:13px; flex-wrap:wrap; }
+    .temp-label { font-weight:bold; color:#c2570c; }
+    .temp-field { display:flex; align-items:center; gap:4px; }
+    .temp-input { width:5.5em; padding:8px 6px; font-size:16px; border:1px solid #d9c7b8; border-radius:8px; text-align:center; background:#fff; }
+    .temp-input:disabled { background:#f3efeb; color:#999; }
+    .temp-input.is-fever { border-color:#c0392b; color:#c0392b; font-weight:bold; background:#fdecea; }
+    .temp-error { flex-basis:100%; font-size:12px; color:#c0392b; }
+    .temp-unavailable { flex-basis:100%; font-size:12px; color:#c0392b; }
   </style>
 </head>
 <body>
@@ -838,10 +847,11 @@
         '.diaper-stepper-btn, #photo-upload-area, .btn-remove-photo, ' +
         '.bowel-add-btn, .bowel-none-checkbox, .bowel-row-del-btn, ' +
         '.bowel-hour-select, .bowel-minute-select, .bowel-stool-select, .bowel-amount-select, .bowel-place-select, ' +
-        '.patrol-checkbox, .patrol-copy-btn'
+        '.patrol-checkbox, .patrol-copy-btn, .temp-input'
       ).forEach(el => {
         // 見回りは読み込みが終わっていない/失敗している間は有効化しない（renderPatrolBlock と同じ条件）
         if (el.classList.contains('patrol-checkbox')) { el.disabled = isDisabled || !patrolLoadedForDate; return; }
+        if (el.classList.contains('temp-input')) { el.disabled = isDisabled || tempLoadedForDate !== dateEl.value; return; }
         if ('disabled' in el) el.disabled = isDisabled;
         else el.style.pointerEvents = isDisabled ? 'none' : '';
       });
@@ -1093,6 +1103,77 @@
     // 本文のautosave/差分保存とは完全に独立した保存経路（テーブルへの直接INSERT/UPDATE/DELETE）。
     let bowelRecordsByResident = {};   // { residentId: [{id, kind, recorded_at, stool_type, amount, place}] }
     let bowelLoadedForDate = null;     // ロードが完了している日付（未完了/失敗ならnull）
+
+    // ─── 検温（夕・朝）。設計: docs/superpowers/specs/2026-11-10-temperature-records-design.md ───
+    let tempLoadedForDate = null;        // 読み込みが完了している日付（未完了/失敗なら null）
+    let tempRecords = {};                // key: `${subject}|${slot}` → {id, temp_c}。subject は resident_id か short_stay_key
+    function tempKey(subject, slot) { return `${subject}|${slot}`; }
+    async function loadTemperatureRecords(dateISO) {
+      tempLoadedForDate = null; tempRecords = {};
+      const { data, error } = await db.from('temperature_records')
+        .select('id, resident_id, short_stay_key, slot, temp_c')
+        .eq('gh_num', parseInt(ghNum)).eq('report_date', dateISO);
+      if (error) { console.error('temperature_records load failed:', error.message); return; } // 表が無い本番でも日報は止めない
+      (data || []).forEach(r => { tempRecords[tempKey(r.resident_id != null ? String(r.resident_id) : r.short_stay_key, r.slot)] = { id: r.id, temp_c: Number(r.temp_c) }; });
+      tempLoadedForDate = dateISO;
+    }
+
+    /** subject: 利用者は String(resident_id)、短期入所は '__short_stay_N__'。nameFn: 保存時の表示名を返す関数 */
+    function renderTemperatureRow(container, subject, nameFn) {
+      const row = document.createElement('div');
+      row.className = 'temp-row'; row.dataset.subject = subject;
+      row.innerHTML = `
+        <span class="temp-label">検温</span>
+        <label class="temp-field">夕 <input type="number" class="temp-input" data-slot="evening" step="0.1" min="35" max="42" inputmode="decimal" placeholder="36.5" disabled></label>
+        <span>／</span>
+        <label class="temp-field">朝 <input type="number" class="temp-input" data-slot="morning" step="0.1" min="35" max="42" inputmode="decimal" placeholder="36.5" disabled></label>
+        <div class="temp-error" style="display:none"></div>
+        <div class="temp-unavailable" style="display:none">検温を読み込めませんでした。再読み込みしてください</div>`;
+      row.querySelectorAll('.temp-input').forEach(inp => {
+        inp.addEventListener('change', () => persistTemperature(row, subject, nameFn, inp));
+        inp.addEventListener('input', () => { const n = TemperatureLogic.normalizeTemp(inp.value); inp.classList.toggle('is-fever', !n.error && TemperatureLogic.isFever(n.value)); });
+      });
+      container.appendChild(row);
+      refreshTemperatureRow(row);
+      return row;
+    }
+    function refreshTemperatureRow(row) {
+      const subject = row.dataset.subject;
+      row.querySelectorAll('.temp-input').forEach(inp => {
+        const rec = tempRecords[tempKey(subject, inp.dataset.slot)];
+        inp.value = rec ? TemperatureLogic.formatTemp(rec.temp_c) : '';
+        inp.classList.toggle('is-fever', !!rec && TemperatureLogic.isFever(rec.temp_c));
+        inp.disabled = tempLoadedForDate !== dateEl.value;
+      });
+      row.querySelector('.temp-unavailable').style.display = tempLoadedForDate ? 'none' : '';
+    }
+    function refreshAllTemperatureRows() { document.querySelectorAll('.temp-row').forEach(refreshTemperatureRow); }
+    async function persistTemperature(row, subject, nameFn, inp) {
+      const errEl = row.querySelector('.temp-error');
+      errEl.style.display = 'none';
+      if (tempLoadedForDate !== dateEl.value) { refreshTemperatureRow(row); return; } // 日付切替の隙間で別日付に書かない
+      const n = TemperatureLogic.normalizeTemp(inp.value);
+      if (n.error) { errEl.textContent = n.error; errEl.style.display = ''; return; } // 保存しない・値は欄に残す
+      const slot = inp.dataset.slot, key = tempKey(subject, slot), prev = tempRecords[key];
+      if ((prev ? prev.temp_c : null) === n.value) { refreshTemperatureRow(row); return; }
+      const isShortStay = subject.startsWith('__short_stay_');
+      if (n.value === null) {
+        if (!prev) return;
+        const { error } = await db.from('temperature_records').delete().eq('id', prev.id);
+        if (error) { errEl.textContent = '保存できませんでした。通信を確認してもう一度お試しください'; errEl.style.display = ''; refreshTemperatureRow(row); return; }
+        delete tempRecords[key]; refreshTemperatureRow(row); return;
+      }
+      const payload = { gh_num: parseInt(ghNum), report_date: dateEl.value, slot, temp_c: n.value, resident_name: nameFn(), updated_at: new Date().toISOString(),
+        resident_id: isShortStay ? null : parseInt(subject, 10), short_stay_key: isShortStay ? subject : null };
+      const { data, error } = await db.from('temperature_records')
+        .upsert(payload, { onConflict: isShortStay ? 'gh_num,report_date,short_stay_key,slot' : 'gh_num,report_date,resident_id,slot' })
+        .select('id, temp_c').single();
+      if (error) { errEl.textContent = '保存できませんでした。通信を確認してもう一度お試しください'; errEl.style.display = ''; refreshTemperatureRow(row); return; }
+      tempRecords[key] = { id: data.id, temp_c: Number(data.temp_c) };
+      refreshTemperatureRow(row);
+    }
+    // ⚠️ 部分一意インデックス（where付き）への onConflict が本番で400になる場合は、
+    // upsertをやめ prev があれば update().eq('id', prev.id)、無ければ insert() にする。
     const BOWEL_DRAFT_KEY_PREFIX = 'bowel_draft_';  // localStorage: `${prefix}${ghNum}_${dateISO}_${residentId}`
 
     function bowelDraftKey(dateISO, residentId) {
@@ -2893,9 +2974,10 @@
       await loadBowelRecords(dateISO);
       if (!reportLoadSeq.isCurrent(loadSeq)) return;
       restoreBowelDrafts(dateISO);
-      await loadPatrolRecords(dateISO);
+      await Promise.all([loadPatrolRecords(dateISO), loadTemperatureRecords(dateISO)]);
       if (!reportLoadSeq.isCurrent(loadSeq)) return;
       rerenderPatrolBlocks();
+      refreshAllTemperatureRows();
       reportLoadedFor = dateISO;
       reportDirty = false; // ここでDOMはサーバー内容と一致済みなので、ロード中の入力(blocked)は破棄してよい
       offerDraftRestore(dateISO, (data && data.residents) || {});
@@ -3144,6 +3226,7 @@
             <textarea placeholder="${escapeHtml(r.name)}の様子を記入（帰宅〜朝の流れ）..."></textarea>
           `;
           bindBowelTextareaHint(div, r.name);
+          renderTemperatureRow(div, String(r.id), () => r.name);
           const bowelBlock = renderBowelSection(div, r.id, r.name);
           bindBowelSectionEvents(bowelBlock);
           const patrolBlock = renderPatrolSection(div, r.id, r.name);
@@ -3176,6 +3259,7 @@
             </div>
             <textarea placeholder="様子を記入（帰宅〜朝の流れ）..."></textarea>
           `;
+          renderTemperatureRow(entry, entry.dataset.shortStayKey, () => entry.querySelector('.short-stay-name-input').value.trim() || `短期入所${['①','②'][n-1]}`);
           entry.querySelector('input').addEventListener('input', scheduleAutoSave);
           entry.querySelector('textarea').addEventListener('input', function() { autoExpand(this); scheduleAutoSave(); });
           section.appendChild(entry);
@@ -3222,9 +3306,10 @@
       // 排便記録はその日付のデータなので日付ごとに取り直す（個人の希望品＝GHごと1回とは異なる）
       await loadBowelRecords(dateISO);
       restoreBowelDrafts(dateISO);
-      await loadPatrolRecords(dateISO);
+      await Promise.all([loadPatrolRecords(dateISO), loadTemperatureRecords(dateISO)]);
       if (!reportLoadSeq.isCurrent(loadSeq)) return; // 日付が切り替わっていれば、その読み込みに任せる
       rerenderPatrolBlocks();
+      refreshAllTemperatureRows();
       reportLoadedFor = dateISO;
       offerDraftRestore(dateISO, (reportData && reportData.residents) || {});
       setFormInputsDisabled(false);
