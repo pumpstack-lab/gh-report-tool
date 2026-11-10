@@ -33,5 +33,27 @@
     return !canSaveReport(state) && !!(state && state.dirty);
   }
 
-  return { canSaveReport, shouldWarnUnsaved };
+  /**
+   * 日付を素早く 2 回切り替えた時に、先に出した読み込みの応答を捨てるための連番。
+   * 読み込みの先頭で begin() を呼び、各 await の後で isCurrent(seq) が false なら抜ける。
+   * （先の応答が後から着くと reportLoadedFor が別日付のまま残り、保存が黙って止まる・2026-11-10）
+   */
+  function createLoadSequence() {
+    let current = 0;
+    return {
+      begin() { current += 1; return current; },
+      isCurrent(seq) { return seq === current; },
+    };
+  }
+
+  /**
+   * 写真の ✕ を押してよいか。読み込みが終わった日付でだけ消せる。
+   * ロード中に押すと Storage の実体だけ消えて日報側の一覧に残る（2026-09-04 の残宿題②）。
+   */
+  function canRemovePhoto(state) {
+    const { loadedFor, dateISO } = state || {};
+    return !!dateISO && loadedFor === dateISO;
+  }
+
+  return { canSaveReport, shouldWarnUnsaved, createLoadSequence, canRemovePhoto };
 });

@@ -10,7 +10,7 @@
   <script src="scripts/auth_ui.js?v=1"></script>
   <script src="diaper-logic.js?v=3"></script>
   <script src="scripts/diaper_stock_label.js?v=2"></script>
-  <script src="scripts/report_guard.js?v=1"></script>
+  <script src="scripts/report_guard.js?v=2"></script>
   <script src="scripts/report_patch.js?v=2"></script>
   <script src="scripts/save_retry.js?v=1"></script>
   <script src="scripts/report_draft.js?v=1"></script>
@@ -518,6 +518,7 @@
       cursor: pointer;
       display: flex; align-items: center; justify-content: center;
     }
+    .btn-remove-photo:disabled { opacity: 0.35; cursor: not-allowed; } /* 読み込み中は押せない */
     .photo-uploading {
       font-size: 12px; color: #c2570c;
       text-align: center; padding: 6px 0;
@@ -665,7 +666,7 @@
         wrap.className = 'photo-thumb-wrap';
         wrap.innerHTML = `
           <img src="${photo.url}" loading="lazy">
-          <button class="btn-remove-photo" onclick="removePhoto(${idx})">✕</button>
+          <button class="btn-remove-photo" onclick="removePhoto(${idx})"${reportLoadedFor === dateEl.value ? '' : ' disabled'}>✕</button>
         `;
         row.appendChild(wrap);
       });
@@ -673,7 +674,10 @@
     }
 
     async function removePhoto(idx) {
+      // 読み込みが終わった日付でだけ消す（ロード中に消すと Storage の実体だけ消えて一覧に残る）
+      if (!ReportGuard.canRemovePhoto({ loadedFor: reportLoadedFor, dateISO: dateEl.value })) return;
       const photo = uploadedPhotos[idx];
+      if (!photo) return;
       await storage.from('report-photos').remove([photo.path]);
       uploadedPhotos.splice(idx, 1);
       renderPhotoPreview();
@@ -828,7 +832,7 @@
         '#workers-container select, #btn-add-worker, ' +
         '.resident-entry textarea, .short-stay-entry input, .short-stay-entry textarea, ' +
         '#shortage-list input, #shortage-list .btn-remove-shortage, #btn-add-shortage, ' +
-        '.diaper-stepper-btn, #photo-upload-area, ' +
+        '.diaper-stepper-btn, #photo-upload-area, .btn-remove-photo, ' +
         '.bowel-add-btn, .bowel-none-checkbox, .bowel-row-del-btn, ' +
         '.bowel-hour-select, .bowel-minute-select, .bowel-stool-select, .bowel-amount-select, .bowel-place-select, ' +
         '.patrol-checkbox, .patrol-copy-btn'
@@ -2777,7 +2781,9 @@
       });
     }
 
+    const reportLoadSeq = ReportGuard.createLoadSequence(); // 日付の素早い切替で先の応答を捨てる
     async function loadDateData(dateISO) {
+      const loadSeq = reportLoadSeq.begin();
       reportLoadedFor = null;
       reportDirty = false;
       setLoadGuardBanner(null);
@@ -2792,6 +2798,7 @@
         .eq('gh_num', parseInt(ghNum))
         .eq('report_date', dateISO)
         .maybeSingle();
+      if (!reportLoadSeq.isCurrent(loadSeq)) return; // 後から出した読み込みがある＝この応答は古い
 
       if (error) {
         console.error('reports load failed:', error.message);
@@ -2808,6 +2815,7 @@
       document.getElementById('existing-badge').textContent = data ? '記録あり ✓' : '';
 
       await loadDiaperUsage(dateISO);
+      if (!reportLoadSeq.isCurrent(loadSeq)) return;
       document.querySelectorAll('.diaper-stepper-row').forEach(row => {
         const v = diaperUsageValues[row.dataset.itemId] || 0;
         row.querySelector('.diaper-stepper-count').textContent = v;
@@ -2867,8 +2875,10 @@
       pendingDeferredReplacements = {};
       // 排便記録はその日付のデータなので日付ごとに取り直す（個人の希望品＝GHごと1回とは異なる）
       await loadBowelRecords(dateISO);
+      if (!reportLoadSeq.isCurrent(loadSeq)) return;
       restoreBowelDrafts(dateISO);
       await loadPatrolRecords(dateISO);
+      if (!reportLoadSeq.isCurrent(loadSeq)) return;
       rerenderPatrolBlocks();
       reportLoadedFor = dateISO;
       reportDirty = false; // ここでDOMはサーバー内容と一致済みなので、ロード中の入力(blocked)は破棄してよい
@@ -3064,6 +3074,7 @@
 
     // ─── Init (parallel fetch) ────────────────────────────
     async function init() {
+      const loadSeq = reportLoadSeq.begin(); // 開いた直後に日付を変えた時は、後の読み込みを正にする
       const dateISO = dateEl.value;
       const container = document.getElementById('residents-container');
       container.innerHTML = '<div style="text-align:center;padding:20px;color:#aaa;font-size:14px">読み込み中...</div>';
@@ -3196,6 +3207,7 @@
       await loadBowelRecords(dateISO);
       restoreBowelDrafts(dateISO);
       await loadPatrolRecords(dateISO);
+      if (!reportLoadSeq.isCurrent(loadSeq)) return; // 日付が切り替わっていれば、その読み込みに任せる
       rerenderPatrolBlocks();
       reportLoadedFor = dateISO;
       offerDraftRestore(dateISO, (reportData && reportData.residents) || {});
