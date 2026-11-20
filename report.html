@@ -18,6 +18,7 @@
   <script src="scripts/worktype_rules.js?v=1"></script>
   <script src="scripts/bowel_copy.js?v=1"></script>
   <script src="scripts/patrol_copy.js?v=1"></script>
+  <script src="scripts/item_notice.js?v=1"></script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
@@ -437,6 +438,8 @@
     /* 個人の希望品（各利用者ブロックの下部・蓄積型: 2026-09-04）。読み取り専用リスト＋追加のみ */
     .personal-items-block { margin-top: 8px; padding-top: 6px; border-top: 1px dashed #dde3ea; }
     .personal-items-label { font-size: 12px; font-weight: bold; color: #5b6b82; margin-bottom: 4px; }
+    /* 利用者ごとの決め打ちの注意書き（scripts/item_notice.js・2026-11-20）。文字 #a3231c × 地 #fdecea ＝ 6.5:1 */
+    .personal-items-notice { display: inline-block; margin-left: 8px; padding: 1px 8px; border-radius: 4px; background: #fdecea; color: #a3231c; font-size: 13px; font-weight: bold; }
     .personal-items-empty { font-size: 12px; color: #9aa5b3; padding: 4px 0; }
     .personal-item-row {
       display: flex; align-items: baseline; gap: 6px; margin-bottom: 4px; font-size: 13px;
@@ -1848,6 +1851,19 @@
       `;
       const addBtn = block.querySelector('.btn-add-personal-item');
       const input = block.querySelector('.personal-item-input');
+      // 決め打ちの注意書き（scripts/item_notice.js）。部品が読めていなくても欄そのものは出す。
+      // 読めていない時は注意書きが黙って消えるので、調べる時の手がかりだけ残す（ネイト指摘・2026-11-20）。
+      if (typeof ItemNotice === 'undefined' && !window.__itemNoticeWarned) {
+        window.__itemNoticeWarned = true;
+        console.warn('item_notice.js が読み込めていません。希望品の注意書きは表示されません');
+      }
+      const noticeText = (typeof ItemNotice !== 'undefined') ? ItemNotice.noticeFor(residentId) : '';
+      if (noticeText) {
+        const notice = document.createElement('span');
+        notice.className = 'personal-items-notice';
+        notice.textContent = noticeText;
+        block.querySelector('.personal-items-label').appendChild(notice);
+      }
       addBtn.disabled = true; // 取得完了まで追加不可（設計書§4のガード）
       input.disabled = true;
       addBtn.addEventListener('click', () => addPersonalItem(block));
