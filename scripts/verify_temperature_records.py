@@ -19,7 +19,7 @@ from playwright.sync_api import sync_playwright
 ROOT = Path(__file__).resolve().parent.parent
 PORT = 8797
 BASE = f"http://127.0.0.1:{PORT}"
-GH = 6  # マハロ（短期入所枠あり）
+GH = 6  # 短期入所枠のあるホーム
 DATE = "2026-11-10"
 
 RESIDENTS = [
@@ -102,13 +102,35 @@ def setup_routes(page, *, temp_rows=None, temp_calls=None,
             except Exception:
                 payload = req.post_data
             temp_calls.append({"method": method, "url": url, "body": payload})
+            want_object = "vnd.pgrst.object" in (req.headers.get("accept") or "")
+
+            def reply(row, status=200):
+                out = {"id": row["id"], "slot": row.get("slot"), "temp_c": row["temp_c"]}
+                route.fulfill(status=status, content_type="application/json",
+                               body=json.dumps(out if want_object else [out]))
+
+            def subject_of(r):
+                return r.get("resident_id") if r.get("resident_id") is not None else r.get("short_stay_key")
+
+            if method == "PATCH" and "id=eq." in url:
+                # 追加の測定の行を id 指定で直す（時刻・体温）
+                pid = int([q for q in url.split("?")[1].split("&") if q.startswith("id=eq.")][0].split(".")[1])
+                target = next((r for r in temp_rows if r.get("id") == pid), None)
+                if target is None:
+                    route.fulfill(status=406, content_type="application/json", body=json.dumps({"message": "no rows"}))
+                    return
+                target.update(payload)
+                reply(target)
+                return
             if method in ("POST", "PATCH"):
-                # upsert。onConflict先に一致する既存行をidで更新、無ければ新規発行。
-                subject_key = ("resident_id", payload.get("resident_id")) if payload.get("resident_id") is not None \
-                    else ("short_stay_key", payload.get("short_stay_key"))
                 existing = next((r for r in temp_rows
-                                  if r.get(subject_key[0]) == subject_key[1] and r.get("slot") == payload.get("slot")),
+                                  if subject_of(r) == subject_of(payload) and r.get("slot") == payload.get("slot")),
                                  None)
+                if existing and "on_conflict=" not in url:
+                    # 素の insert で同じ時刻＝一意違反（本番の 23505 相当）
+                    route.fulfill(status=409, content_type="application/json",
+                                   body=json.dumps({"code": "23505", "message": "duplicate key value"}))
+                    return
                 if existing:
                     existing.update(payload)
                     new_row = existing
@@ -116,8 +138,7 @@ def setup_routes(page, *, temp_rows=None, temp_calls=None,
                     new_row = dict(payload)
                     new_row["id"] = 900 + len(temp_rows) + 1
                     temp_rows.append(new_row)
-                route.fulfill(status=200, content_type="application/json",
-                               body=json.dumps([{"id": new_row["id"], "temp_c": new_row["temp_c"]}]))
+                reply(new_row)
                 return
             if method == "DELETE":
                 m = [p for p in url.split("?")[1].split("&") if p.startswith("id=eq.")]
@@ -393,11 +414,244 @@ def case8_load_failure_unavailable(pw):
     return ok
 
 
+def extra_rows(page):
+    return first_resident_row(page).locator('.temp-extra')
+
+
+def add_extra(page, time_text, temp_text):
+    row = first_resident_row(page)
+    row.locator('.temp-add-btn').click()
+    ex = row.locator('.temp-extra').last
+    if time_text is not None:
+        ex.locator('.temp-extra-time').fill(time_text)
+        ex.locator('.temp-extra-time').dispatch_event("change")
+    if temp_text is not None:
+        ex.locator('.temp-extra-temp').fill(temp_text)
+        ex.locator('.temp-extra-temp').dispatch_event("change")
+    page.wait_for_timeout(300)
+    return ex
+
+
+def case10_extra_add(pw):
+    print("\n--- ケース10: ＋測り直しを追加 → 19:35・386 → 素の insert 1 本（slot=19:35・38.6）・欄は 38.6 で赤 ---")
+    browser = pw.chromium.launch()
+    page = new_page(browser)
+    calls = setup_routes(page)
+    goto_loaded(page)
+    ex = add_extra(page, "19:35", "386")
+    writes = [c for c in calls if c["method"] in ("POST", "PATCH", "DELETE")]
+    body = writes[0]["body"] if writes else {}
+    url = writes[0]["url"] if writes else ""
+    ok = (len(writes) == 1 and writes[0]["method"] == "POST" and "on_conflict" not in url
+          and body.get("slot") == "19:35" and body.get("temp_c") == 38.6 and body.get("resident_id") == 101
+          and body.get("report_date") == DATE and "subject_key" not in body
+          and ex.locator('.temp-extra-temp').input_value() == "38.6"
+          and "is-fever" in (ex.locator('.temp-extra-temp').get_attribute("class") or "")
+          and "is-draft" not in (ex.get_attribute("class") or "")
+          and (ex.get_attribute("data-id") or "").isdigit())
+    record("追加の測定は時刻と体温が揃って 1 本だけ保存・点なし 386 は 38.6・赤", ok,
+           f"writes={len(writes)} url={url} body={json.dumps(body, ensure_ascii=False)} id={ex.get_attribute('data-id')}")
+    browser.close()
+    return ok
+
+
+def case11_extra_half_no_write(pw):
+    print("\n--- ケース11: 時刻だけ／体温だけでは保存しない・入れかけの行は ✕ で確認なしに消える ---")
+    browser = pw.chromium.launch()
+    page = new_page(browser)
+    calls = setup_routes(page)
+    goto_loaded(page)
+    add_extra(page, "19:35", None)
+    add_extra(page, None, "37.0")
+    n_before = extra_rows(page).count()
+    extra_rows(page).first.locator('.temp-extra-del').click()
+    page.wait_for_timeout(200)
+    writes = [c for c in calls if c["method"] in ("POST", "PATCH", "DELETE")]
+    ok = len(writes) == 0 and n_before == 2 and extra_rows(page).count() == 1
+    record("片方だけでは保存 0 本・入れかけの行は ✕ で消える", ok, f"writes={len(writes)} rows={n_before}->{extra_rows(page).count()}")
+    browser.close()
+    return ok
+
+
+def case12_extra_prefill_sorted(pw):
+    print("\n--- ケース12: 保存済みの追加測定が「前日の夜→当日の未明」の順で出る・夕と朝の欄とは混ざらない ---")
+    browser = pw.chromium.launch()
+    page = new_page(browser)
+    temp_rows = [
+        {"id": 811, "resident_id": 101, "short_stay_key": None, "slot": "01:00", "temp_c": 37.2},
+        {"id": 812, "resident_id": 101, "short_stay_key": None, "slot": "22:00", "temp_c": 38.1},
+        {"id": 813, "resident_id": 101, "short_stay_key": None, "slot": "evening", "temp_c": 38.6},
+        {"id": 814, "resident_id": 102, "short_stay_key": None, "slot": "20:00", "temp_c": 36.9},
+    ]
+    setup_routes(page, temp_rows=temp_rows)
+    goto_loaded(page)
+    rows = extra_rows(page)
+    times = [rows.nth(i).locator('.temp-extra-time').input_value() for i in range(rows.count())]
+    temps = [rows.nth(i).locator('.temp-extra-temp').input_value() for i in range(rows.count())]
+    evening = first_resident_row(page).locator('.temp-input[data-slot="evening"]').input_value()
+    ok = times == ["22:00", "01:00"] and temps == ["38.1", "37.2"] and evening == "38.6"
+    record("保存済みの追加測定が流れの順に出る（他の利用者の分は混ざらない）", ok, f"times={times} temps={temps} evening={evening}")
+    browser.close()
+    return ok
+
+
+def case13_extra_edit(pw):
+    print("\n--- ケース13: 保存済みの行の体温・時刻を直す → id 指定の更新 1 本ずつ・空にしても消えない ---")
+    browser = pw.chromium.launch()
+    page = new_page(browser)
+    temp_rows = [{"id": 812, "resident_id": 101, "short_stay_key": None, "slot": "22:00", "temp_c": 38.1}]
+    calls = setup_routes(page, temp_rows=temp_rows)
+    goto_loaded(page)
+    ex = extra_rows(page).first
+    ex.locator('.temp-extra-temp').fill("37.9")
+    ex.locator('.temp-extra-temp').dispatch_event("change")
+    page.wait_for_timeout(300)
+    ex.locator('.temp-extra-time').fill("22:30")
+    ex.locator('.temp-extra-time').dispatch_event("change")
+    page.wait_for_timeout(300)
+    writes = [c for c in calls if c["method"] in ("POST", "PATCH", "DELETE")]
+    ok_updates = (len(writes) == 2 and all(w["method"] == "PATCH" and "id=eq.812" in w["url"] for w in writes)
+                  and writes[0]["body"].get("temp_c") == 37.9 and writes[1]["body"].get("slot") == "22:30")
+    ex.locator('.temp-extra-temp').fill("")
+    ex.locator('.temp-extra-temp').dispatch_event("change")
+    page.wait_for_timeout(300)
+    writes2 = [c for c in calls if c["method"] in ("POST", "PATCH", "DELETE")]
+    err = first_resident_row(page).locator('.temp-error')
+    ok_keep = (len(writes2) == 2 and ex.locator('.temp-extra-temp').input_value() == "37.9"
+               and err.is_visible() and "✕" in err.inner_text())
+    ok = ok_updates and ok_keep
+    record("保存済みの行は id 指定で更新・空にしても消さず元の値に戻して知らせる", ok,
+           f"writes={[(w['method'], w['body']) for w in writes]} after_clear={len(writes2)}")
+    browser.close()
+    return ok
+
+
+def case14_extra_duplicate_time(pw):
+    print("\n--- ケース14: 既にある時刻と同じ時刻の行を足す → 保存 0 本・「同じ時刻の記録があります」 ---")
+    browser = pw.chromium.launch()
+    page = new_page(browser)
+    temp_rows = [{"id": 812, "resident_id": 101, "short_stay_key": None, "slot": "22:00", "temp_c": 38.1}]
+    calls = setup_routes(page, temp_rows=temp_rows)
+    goto_loaded(page)
+    add_extra(page, "22:00", "37.5")
+    writes = [c for c in calls if c["method"] in ("POST", "PATCH", "DELETE")]
+    err = first_resident_row(page).locator('.temp-error')
+    ok = len(writes) == 0 and err.is_visible() and err.inner_text() == "同じ時刻の記録があります"
+    record("同じ時刻の追加は保存 0 本・注意文", ok, f"writes={len(writes)} err={err.inner_text() if err.is_visible() else ''}")
+    browser.close()
+    return ok
+
+
+def case15_extra_delete_confirm(pw):
+    print("\n--- ケース15: 保存済みの行の ✕ → 確認でやめると 0 本・はいで DELETE 1 本 ---")
+    browser = pw.chromium.launch()
+    page = new_page(browser)
+    temp_rows = [{"id": 812, "resident_id": 101, "short_stay_key": None, "slot": "07:05", "temp_c": 38.1}]
+    calls = setup_routes(page, temp_rows=temp_rows)
+    goto_loaded(page)
+    messages = []
+    answers = [False, True]
+    def on_dialog(d):
+        messages.append(d.message)
+        (d.accept if answers.pop(0) else d.dismiss)()
+    page.on("dialog", on_dialog)
+    extra_rows(page).first.locator('.temp-extra-del').click()
+    page.wait_for_timeout(300)
+    after_cancel = len([c for c in calls if c["method"] == "DELETE"])
+    rows_after_cancel = extra_rows(page).count()
+    extra_rows(page).first.locator('.temp-extra-del').click()
+    page.wait_for_timeout(300)
+    dels = [c for c in calls if c["method"] == "DELETE"]
+    ok = (after_cancel == 0 and rows_after_cancel == 1 and len(dels) == 1 and "id=eq.812" in dels[0]["url"]
+          and extra_rows(page).count() == 0 and messages and messages[0].startswith("7:05 の検温"))
+    record("✕ は確認つき・やめると消えない・はいで 1 本だけ消える", ok, f"msg={messages[:1]} cancel={after_cancel} dels={len(dels)}")
+    browser.close()
+    return ok
+
+
+def case16_labels_and_dotless(pw):
+    print("\n--- ケース16: 夕・朝に月日が出る（夕＝前日）・夕に 366 → 36.6 で保存し欄も 36.6 ---")
+    browser = pw.chromium.launch()
+    page = new_page(browser)
+    calls = setup_routes(page)
+    goto_loaded(page)
+    row = first_resident_row(page)
+    ev = row.locator('[data-slot-date="evening"]').inner_text()
+    mo = row.locator('[data-slot-date="morning"]').inner_text()
+    inp = row.locator('.temp-input[data-slot="evening"]')
+    inp.fill("366")
+    inp.dispatch_event("change")
+    page.wait_for_timeout(300)
+    writes = [c for c in calls if c["method"] in ("POST", "PATCH")]
+    ok = (ev == "11/9" and mo == "11/10" and len(writes) == 1 and writes[0]["body"].get("temp_c") == 36.6
+          and inp.input_value() == "36.6")
+    record("夕・朝の月日（夕は前日）・点なし 366 は 36.6 で保存して欄に見せる", ok,
+           f"evening={ev} morning={mo} writes={[w['body'].get('temp_c') for w in writes]} shown={inp.input_value()}")
+    browser.close()
+    return ok
+
+
+def case17_extra_disabled_and_width(pw):
+    print("\n--- ケース17: 読み込み失敗時は追加ボタンも無効・375px で検温の行が枠からはみ出さない ---")
+    browser = pw.chromium.launch()
+    page = new_page(browser)
+    setup_routes(page, temp_get_fail=True)
+    page.goto(f"{BASE}/report.html?gh={GH}&date={DATE}", wait_until="domcontentloaded")
+    page.wait_for_function("() => document.querySelectorAll('.temp-row').length > 0 && !!reportLoadedFor", timeout=5000)
+    ok_disabled = first_resident_row(page).locator('.temp-add-btn').is_disabled()
+    page.close()
+    page = browser.new_page(viewport={"width": 375, "height": 900})
+    page.add_init_script(DELAY_INIT_SCRIPT)
+    setup_routes(page)
+    goto_loaded(page)
+    add_extra(page, "19:35", "38.6")
+    over = page.evaluate("""() => {
+      const row = document.querySelector('.temp-row[data-subject="101"]');
+      const box = row.parentElement.getBoundingClientRect();
+      return Array.from(row.querySelectorAll('input, button, label')).filter(el => {
+        const r = el.getBoundingClientRect(); return r.width > 0 && (r.right > box.right + 0.5 || r.left < box.left - 0.5);
+      }).length;
+    }""")
+    ok = ok_disabled and over == 0
+    record("読み込み失敗時は追加ボタン無効・375px ではみ出し 0", ok, f"disabled={ok_disabled} はみ出し={over}")
+    browser.close()
+    return ok
+
+
+def case18_sibling_not_wiped(pw):
+    print("\n--- ケース18: 夕の保存の返事が遅くても、その間に朝へ打った数字が消えない・両方保存される ---")
+    browser = pw.chromium.launch()
+    page = new_page(browser)
+    calls = setup_routes(page)
+    goto_loaded(page)
+    # 書き込みの返事だけ 400ms 遅らせる
+    page.evaluate("""() => { const f = window.fetch; window.fetch = async (u, o) => {
+      const r = await f(u, o);
+      if (String(u).includes('temperature_records') && o && o.method && o.method !== 'GET') await new Promise(x => setTimeout(x, 400));
+      return r; }; }""")
+    row = first_resident_row(page)
+    ev = row.locator('.temp-input[data-slot="evening"]')
+    mo = row.locator('.temp-input[data-slot="morning"]')
+    ev.fill("36.8")
+    ev.dispatch_event("change")
+    mo.fill("36.4")           # 夕の返事を待たずに朝へ
+    page.wait_for_timeout(700)  # 夕の返事が届く
+    kept = mo.input_value()
+    mo.dispatch_event("change")
+    page.wait_for_timeout(700)
+    writes = [c["body"] for c in calls if c["method"] in ("POST", "PATCH")]
+    ok = (kept == "36.4" and ev.input_value() == "36.8" and mo.input_value() == "36.4"
+          and sorted(set((w.get("slot"), w.get("temp_c")) for w in writes)) == [("evening", 36.8), ("morning", 36.4)])
+    record("隣の欄に打っている途中の数字を、先の保存の返事が消さない", ok, f"kept={kept} writes={[(w.get('slot'), w.get('temp_c')) for w in writes]}")
+    browser.close()
+    return ok
+
+
 def screenshot_widths(pw):
-    print("\n--- スクリーンショット（3幅・夕に37.8を入れた赤の状態） ---")
+    print("\n--- スクリーンショット（3幅・夕 37.8・朝 36.5・追加の測定 2 件） ---")
     browser = pw.chromium.launch()
     for width, name in [(375, "sp"), (768, "tablet"), (1280, "pc")]:
-        page = browser.new_page(viewport={"width": width, "height": 900})
+        page = browser.new_page(viewport={"width": width, "height": 900}, locale="ja-JP")
         page.add_init_script(DELAY_INIT_SCRIPT)
         setup_routes(page)
         page.goto(f"{BASE}/report.html?gh={GH}&date={DATE}", wait_until="domcontentloaded")
@@ -405,7 +659,12 @@ def screenshot_widths(pw):
         row = first_resident_row(page)
         inp = row.locator('.temp-input[data-slot="evening"]')
         inp.fill("37.8")
-        inp.dispatch_event("input")
+        inp.dispatch_event("change")
+        row.locator('.temp-input[data-slot="morning"]').fill("36.5")
+        row.locator('.temp-input[data-slot="morning"]').dispatch_event("change")
+        add_extra(page, "22:00", "38.1")
+        add_extra(page, "01:00", "37.2")
+        row.scroll_into_view_if_needed()
         page.wait_for_timeout(200)
         out = ROOT / "scripts" / f"_temperature_{width}.png"
         page.screenshot(path=str(out))
@@ -427,6 +686,10 @@ def main():
             r7 = case7_disabled_during_load_no_write(pw)
             r8 = case8_load_failure_unavailable(pw)
             r9 = case9_bad_input_does_not_delete(pw)
+            extra = [case10_extra_add(pw), case11_extra_half_no_write(pw), case12_extra_prefill_sorted(pw),
+                     case13_extra_edit(pw), case14_extra_duplicate_time(pw), case15_extra_delete_confirm(pw),
+                     case16_labels_and_dotless(pw), case17_extra_disabled_and_width(pw),
+                     case18_sibling_not_wiped(pw)]
             screenshot_widths(pw)
     finally:
         server.terminate()
@@ -439,8 +702,8 @@ def main():
         print(f"[{mark}] {name}")
         if not ok:
             all_ok = False
-    labels = ["ケース1", "ケース2", "ケース3", "ケース4", "ケース5", "ケース6", "ケース7", "ケース8", "ケース9"]
-    rs = [r1, r2, r3, r4, r5, r6, r7, r8, r9]
+    labels = [f"ケース{i}" for i in range(1, 19)]
+    rs = [r1, r2, r3, r4, r5, r6, r7, r8, r9] + extra
     print("\n" + " / ".join(f"{l}: {'PASS' if r else 'FAIL'}" for l, r in zip(labels, rs)))
     sys.exit(0 if all_ok else 1)
 

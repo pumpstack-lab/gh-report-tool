@@ -1,5 +1,5 @@
 -- ~/Desktop/01 開発/gh-report-tool/migrations/2026-11-10_temperature_records.sql
--- 検温（夕・朝）。設計: docs/superpowers/specs/2026-11-10-temperature-records-design.md §2
+-- 検温（夕・朝＋追加の測定）。設計: docs/superpowers/specs/2026-11-10-temperature-records-design.md §2
 -- reports.residents には入れない（差分保存の CAS と競合するため・bowel_records と同じ理由）。
 -- report_date は「朝の日付」（管理画面の見出し 10/4 夜 → 10/5 朝 と同じ）。evening は前夜の値。
 -- 短期入所①②は resident_id が無いので short_stay_key で持つ。
@@ -15,7 +15,8 @@ create table if not exists temperature_records (
   -- resident_id/short_stay_keyのどちらかを1本の式にまとめた生成列で一意索引を作る。
   subject_key    text generated always as (coalesce(resident_id::text, short_stay_key)) stored not null,
   resident_name  text not null,                         -- 表示用スナップショット
-  slot           text not null check (slot in ('evening','morning')),
+  -- 'evening'＝夕・'morning'＝朝・'HH:MM'＝追加の測定（発熱時の測り直しなど。測った時刻・2026-11-21 オーナー決定）
+  slot           text not null check (slot in ('evening','morning') or slot ~ '^([01][0-9]|2[0-3]):[0-5][0-9]$'),
   temp_c         numeric(3,1) not null check (temp_c between 35.0 and 42.0),
   created_at     timestamptz not null default now(),
   updated_at     timestamptz not null default now(),
@@ -29,5 +30,6 @@ drop policy if exists authenticated_all on temperature_records;
 create policy authenticated_all on temperature_records for all to authenticated using (true) with check (true);
 
 -- ─── 適用後の確認（Getter 本体・本番） ───
---   \d temperature_records ／ select polname from pg_policies where tablename='temperature_records';
+--   \d temperature_records ／ select polname from pg_policies where tablename='temperature_records';  -- authenticated_all 1件
+--   ログインしていない鍵で読むと拒否・書くと拒否になること
 --   もう一度流してエラーにならないこと（冪等）

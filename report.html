@@ -11,7 +11,7 @@
   <script src="diaper-logic.js?v=3"></script>
   <script src="scripts/diaper_stock_label.js?v=2"></script>
   <script src="scripts/report_guard.js?v=2"></script>
-  <script src="scripts/temperature_logic.js?v=1"></script>
+  <script src="scripts/temperature_logic.js?v=2"></script>
   <script src="scripts/report_patch.js?v=2"></script>
   <script src="scripts/save_retry.js?v=1"></script>
   <script src="scripts/report_draft.js?v=1"></script>
@@ -558,9 +558,19 @@
     .temp-row { display:flex; align-items:center; gap:8px; margin-top:10px; font-size:13px; flex-wrap:wrap; }
     .temp-label { font-weight:bold; color:#c2570c; }
     .temp-field { display:flex; align-items:center; gap:4px; }
-    .temp-input { width:5.5em; padding:8px 6px; font-size:16px; border:1px solid #d9c7b8; border-radius:8px; text-align:center; background:#fff; }
+    .temp-pair { display:flex; align-items:center; gap:12px; flex-wrap:nowrap; }
+    .temp-input { width:5em; padding:8px 6px; font-size:16px; border:1px solid #d9c7b8; border-radius:8px; text-align:center; background:#fff; }
     .temp-input:disabled { background:#f3efeb; color:#999; }
     .temp-input.is-fever { border-color:#c0392b; color:#c0392b; font-weight:bold; background:#fdecea; }
+    .temp-date { font-size:11px; color:#666; margin-left:2px; }
+    .temp-extras { flex-basis:100%; display:flex; flex-direction:column; gap:6px; }
+    .temp-extras:empty { display:none; }
+    .temp-extra { display:flex; align-items:center; gap:8px; }
+    .temp-extra-time { padding:8px 6px; font-size:16px; border:1px solid #d9c7b8; border-radius:8px; background:#fff; font-family:inherit; }
+    .temp-extra-time:disabled { background:#f3efeb; color:#999; }
+    .temp-extra-del { width:40px; height:40px; border:1px solid #d9c7b8; border-radius:8px; background:#fff; color:#7a5a45; font-size:15px; }
+    .temp-add-btn { min-height:40px; padding:0 12px; font-size:13px; font-family:inherit; background:#fff; color:#c2570c; border:1px dashed #dd6a12; border-radius:8px; }
+    .temp-add-btn:disabled, .temp-extra-del:disabled { opacity:.5; }
     .temp-error { flex-basis:100%; font-size:12px; color:#c0392b; }
     .temp-unavailable { flex-basis:100%; font-size:12px; color:#c0392b; }
   </style>
@@ -847,11 +857,11 @@
         '.diaper-stepper-btn, #photo-upload-area, .btn-remove-photo, ' +
         '.bowel-add-btn, .bowel-none-checkbox, .bowel-row-del-btn, ' +
         '.bowel-hour-select, .bowel-minute-select, .bowel-stool-select, .bowel-amount-select, .bowel-place-select, ' +
-        '.patrol-checkbox, .patrol-copy-btn, .temp-input'
+        '.patrol-checkbox, .patrol-copy-btn, .temp-input, .temp-extra-time, .temp-extra-del, .temp-add-btn'
       ).forEach(el => {
         // 見回りは読み込みが終わっていない/失敗している間は有効化しない（renderPatrolBlock と同じ条件）
         if (el.classList.contains('patrol-checkbox')) { el.disabled = isDisabled || !patrolLoadedForDate; return; }
-        if (el.classList.contains('temp-input')) { el.disabled = isDisabled || tempLoadedForDate !== dateEl.value; return; }
+        if (el.matches('.temp-input, .temp-extra-time, .temp-extra-del, .temp-add-btn')) { el.disabled = isDisabled || tempLoadedForDate !== dateEl.value; return; }
         if ('disabled' in el) el.disabled = isDisabled;
         else el.style.pointerEvents = isDisabled ? 'none' : '';
       });
@@ -1104,10 +1114,16 @@
     let bowelRecordsByResident = {};   // { residentId: [{id, kind, recorded_at, stool_type, amount, place}] }
     let bowelLoadedForDate = null;     // ロードが完了している日付（未完了/失敗ならnull）
 
-    // ─── 検温（夕・朝）。設計: docs/superpowers/specs/2026-11-10-temperature-records-design.md ───
+    // ─── 検温（夕・朝＋追加の測定）。設計: docs/superpowers/specs/2026-11-10-temperature-records-design.md ───
+    // slot は 'evening'／'morning'／'HH:MM'（追加の測定＝測った時刻・2026-11-21）。
     let tempLoadedForDate = null;        // 読み込みが完了している日付（未完了/失敗なら null）
     let tempRecords = {};                // key: `${subject}|${slot}` → {id, temp_c}。subject は resident_id か short_stay_key
+    const TEMP_SAVE_ERROR = '保存できませんでした。通信を確認してもう一度お試しください';
     function tempKey(subject, slot) { return `${subject}|${slot}`; }
+    function tempExtraSlots(subject) {
+      const pre = `${subject}|`;
+      return TemperatureLogic.sortTimeSlots(Object.keys(tempRecords).filter(k => k.startsWith(pre)).map(k => k.slice(pre.length)));
+    }
     async function loadTemperatureRecords(dateISO) {
       tempLoadedForDate = null; tempRecords = {};
       const { data, error } = await db.from('temperature_records')
@@ -1117,6 +1133,12 @@
       (data || []).forEach(r => { tempRecords[tempKey(r.resident_id != null ? String(r.resident_id) : r.short_stay_key, r.slot)] = { id: r.id, temp_c: Number(r.temp_c) }; });
       tempLoadedForDate = dateISO;
     }
+    function showTempError(row, text) { const el = row.querySelector('.temp-error'); el.textContent = text; el.style.display = ''; }
+    function tempPayloadBase(subject, nameFn, dateISO) {
+      const isShortStay = subject.startsWith('__short_stay_');
+      return { gh_num: parseInt(ghNum), report_date: dateISO, resident_name: nameFn(), updated_at: new Date().toISOString(),
+        resident_id: isShortStay ? null : parseInt(subject, 10), short_stay_key: isShortStay ? subject : null };
+    }
 
     /** subject: 利用者は String(resident_id)、短期入所は '__short_stay_N__'。nameFn: 保存時の表示名を返す関数 */
     function renderTemperatureRow(container, subject, nameFn) {
@@ -1124,59 +1146,169 @@
       row.className = 'temp-row'; row.dataset.subject = subject;
       row.innerHTML = `
         <span class="temp-label">検温</span>
-        <label class="temp-field">夕 <input type="number" class="temp-input" data-slot="evening" step="0.1" min="35" max="42" inputmode="decimal" placeholder="36.5" disabled></label>
-        <span>／</span>
-        <label class="temp-field">朝 <input type="number" class="temp-input" data-slot="morning" step="0.1" min="35" max="42" inputmode="decimal" placeholder="36.5" disabled></label>
+        <span class="temp-pair">
+          <label class="temp-field">夕<span class="temp-date" data-slot-date="evening"></span> <input type="number" class="temp-input" data-slot="evening" step="0.1" min="35" max="42" inputmode="decimal" placeholder="36.5" disabled></label>
+          <label class="temp-field">朝<span class="temp-date" data-slot-date="morning"></span> <input type="number" class="temp-input" data-slot="morning" step="0.1" min="35" max="42" inputmode="decimal" placeholder="36.5" disabled></label>
+        </span>
+        <div class="temp-extras"></div>
+        <button type="button" class="temp-add-btn" disabled>＋ 測り直しを追加</button>
         <div class="temp-error" style="display:none"></div>
         <div class="temp-unavailable" style="display:none">検温を読み込めませんでした。再読み込みしてください</div>`;
-      row.querySelectorAll('.temp-input').forEach(inp => {
+      row.querySelectorAll('.temp-input[data-slot]').forEach(inp => {
         inp.addEventListener('change', () => persistTemperature(row, subject, nameFn, inp));
         inp.addEventListener('input', () => { const n = TemperatureLogic.normalizeTemp(inp.value); inp.classList.toggle('is-fever', !n.error && TemperatureLogic.isFever(n.value)); });
       });
+      row._tempNameFn = nameFn;
+      row.querySelector('.temp-add-btn').addEventListener('click', () => {
+        if (tempLoadedForDate !== dateEl.value) return;
+        const ex = buildTempExtra(row, subject, nameFn, null, null);
+        row.querySelector('.temp-extras').appendChild(ex);
+        ex.querySelector('.temp-extra-time').focus();
+      });
       container.appendChild(row);
       refreshTemperatureRow(row);
+      rebuildTemperatureExtras(row);
       return row;
     }
+    /** 夕・朝の 2 欄だけを保存済みの値に合わせる（追加の測定の行は作り直さない＝入力中のフォーカスを奪わない） */
     function refreshTemperatureRow(row) {
       const subject = row.dataset.subject;
-      row.querySelectorAll('.temp-input').forEach(inp => {
+      const ready = tempLoadedForDate === dateEl.value;
+      const dates = TemperatureLogic.slotDateLabels(dateEl.value);
+      row.querySelectorAll('[data-slot-date]').forEach(el => { el.textContent = dates[el.dataset.slotDate] || ''; });
+      row.querySelectorAll('.temp-input[data-slot]').forEach(inp => {
         const rec = tempRecords[tempKey(subject, inp.dataset.slot)];
         inp.value = rec ? TemperatureLogic.formatTemp(rec.temp_c) : '';
         inp.classList.toggle('is-fever', !!rec && TemperatureLogic.isFever(rec.temp_c));
-        inp.disabled = tempLoadedForDate !== dateEl.value;
+        inp.disabled = !ready;
       });
+      row.querySelector('.temp-add-btn').disabled = !ready;
       row.querySelector('.temp-unavailable').style.display = tempLoadedForDate ? 'none' : '';
     }
-    function refreshAllTemperatureRows() { document.querySelectorAll('.temp-row').forEach(refreshTemperatureRow); }
+    /** 追加の測定の行を保存済みの記録から作り直す（読み込み完了時だけ呼ぶ。入れかけの行も捨てる） */
+    function rebuildTemperatureExtras(row) {
+      const subject = row.dataset.subject, box = row.querySelector('.temp-extras');
+      box.innerHTML = '';
+      tempExtraSlots(subject).forEach(slot => box.appendChild(buildTempExtra(row, subject, row._tempNameFn, slot, tempRecords[tempKey(subject, slot)])));
+    }
+    function refreshAllTemperatureRows() {
+      document.querySelectorAll('.temp-row').forEach(row => { refreshTemperatureRow(row); rebuildTemperatureExtras(row); });
+    }
+    function buildTempExtra(row, subject, nameFn, slot, rec) {
+      const ex = document.createElement('div');
+      ex.className = 'temp-extra' + (rec ? '' : ' is-draft');
+      ex.dataset.slot = rec ? slot : ''; ex.dataset.id = rec ? String(rec.id) : '';
+      ex.innerHTML = `
+        <input type="time" class="temp-extra-time" aria-label="測った時刻">
+        <input type="number" class="temp-input temp-extra-temp" step="0.1" min="35" max="42" inputmode="decimal" placeholder="36.5" aria-label="体温">
+        <button type="button" class="temp-extra-del" aria-label="この測定を消す">✕</button>`;
+      const timeInp = ex.querySelector('.temp-extra-time'), tempInp = ex.querySelector('.temp-extra-temp');
+      if (rec) {
+        timeInp.value = slot; tempInp.value = TemperatureLogic.formatTemp(rec.temp_c);
+        tempInp.classList.toggle('is-fever', TemperatureLogic.isFever(rec.temp_c));
+      }
+      timeInp.addEventListener('change', () => persistTempExtra(row, subject, nameFn, ex));
+      tempInp.addEventListener('change', () => persistTempExtra(row, subject, nameFn, ex));
+      tempInp.addEventListener('input', () => { const n = TemperatureLogic.normalizeTemp(tempInp.value); tempInp.classList.toggle('is-fever', !n.error && TemperatureLogic.isFever(n.value)); });
+      ex.querySelector('.temp-extra-del').addEventListener('click', () => removeTempExtra(row, subject, ex));
+      return ex;
+    }
+    async function persistTempExtra(row, subject, nameFn, ex) {
+      // 保存の往復中にもう一度変えられたら、終わってから今の欄の値でやり直す（黙って落とさない）
+      if (ex.dataset.busy) { ex.dataset.again = '1'; return; }
+      const errEl = row.querySelector('.temp-error');
+      errEl.style.display = 'none';
+      const dateAt = dateEl.value;
+      if (tempLoadedForDate !== dateAt) return; // 日付切替の隙間で別日付に書かない
+      const timeInp = ex.querySelector('.temp-extra-time'), tempInp = ex.querySelector('.temp-extra-temp');
+      if (tempInp.validity && tempInp.validity.badInput) { showTempError(row, TemperatureLogic.RANGE_ERROR); return; }
+      const t = TemperatureLogic.normalizeTime(timeInp.value), n = TemperatureLogic.normalizeTemp(tempInp.value);
+      if (n.error) { showTempError(row, n.error); return; }
+      if (t.error) { showTempError(row, t.error); return; }
+      const savedId = ex.dataset.id, savedSlot = ex.dataset.slot;
+      const saved = savedId ? tempRecords[tempKey(subject, savedSlot)] : null;
+      if (!savedId) {
+        if (t.value === null || n.value === null) return; // 時刻と体温が揃うまで保存しない
+      } else {
+        // 保存済みの行は、欄を空にしても消さない（消すのは ✕ だけ）。元の値に戻して知らせる。
+        if (t.value === null) { timeInp.value = savedSlot; showTempError(row, TemperatureLogic.TIME_ERROR); return; }
+        if (n.value === null) { tempInp.value = saved ? TemperatureLogic.formatTemp(saved.temp_c) : ''; showTempError(row, '消す時は ✕ を押してください'); return; }
+      }
+      const key = tempKey(subject, t.value);
+      if (t.value !== savedSlot && tempRecords[key]) { showTempError(row, TemperatureLogic.DUPLICATE_TIME_ERROR); return; }
+      if (saved && t.value === savedSlot && saved.temp_c === n.value) { tempInp.value = TemperatureLogic.formatTemp(n.value); return; }
+      ex.dataset.busy = '1';
+      try {
+        const fields = Object.assign(tempPayloadBase(subject, nameFn, dateAt), { slot: t.value, temp_c: n.value });
+        const q = savedId
+          ? db.from('temperature_records').update({ slot: fields.slot, temp_c: fields.temp_c, resident_name: fields.resident_name, updated_at: fields.updated_at }).eq('id', savedId)
+          : db.from('temperature_records').insert(fields);
+        const { data, error } = await q.select('id, slot, temp_c').single();
+        if (tempLoadedForDate !== dateAt || dateEl.value !== dateAt) return; // 往復の間に日付が変わった＝その日付の読み込みに任せる
+        if (error) {
+          console.error('temperature_records save failed:', error.message);
+          showTempError(row, error.code === '23505' ? TemperatureLogic.DUPLICATE_TIME_ERROR : TEMP_SAVE_ERROR);
+          return;
+        }
+        if (savedSlot) delete tempRecords[tempKey(subject, savedSlot)];
+        tempRecords[key] = { id: data.id, temp_c: Number(data.temp_c) };
+        ex.dataset.id = String(data.id); ex.dataset.slot = t.value; ex.classList.remove('is-draft');
+        if (!ex.dataset.again) {
+          tempInp.value = TemperatureLogic.formatTemp(Number(data.temp_c));
+          tempInp.classList.toggle('is-fever', TemperatureLogic.isFever(Number(data.temp_c)));
+        }
+      } finally {
+        delete ex.dataset.busy;
+        if (ex.dataset.again) { delete ex.dataset.again; persistTempExtra(row, subject, nameFn, ex); }
+      }
+    }
+    async function removeTempExtra(row, subject, ex) {
+      row.querySelector('.temp-error').style.display = 'none';
+      if (!ex.dataset.id) { ex.remove(); return; } // 入れかけの行はそのまま消す
+      const dateAt = dateEl.value;
+      if (tempLoadedForDate !== dateAt || ex.dataset.busy) return;
+      if (!confirm(`${TemperatureLogic.timeLabel(ex.dataset.slot)} の検温の記録を消しますか？`)) return;
+      ex.dataset.busy = '1';
+      const { error } = await db.from('temperature_records').delete().eq('id', ex.dataset.id);
+      delete ex.dataset.busy;
+      if (tempLoadedForDate !== dateAt || dateEl.value !== dateAt) return;
+      if (error) { console.error('temperature_records delete failed:', error.message); showTempError(row, TEMP_SAVE_ERROR); return; }
+      delete tempRecords[tempKey(subject, ex.dataset.slot)];
+      ex.remove();
+    }
+    /** 保存した 1 欄だけを保存済みの値に合わせる（行ごと直すと、隣の欄に打っている途中の数字を消してしまう） */
+    function refreshTempInput(subject, inp) {
+      const rec = tempRecords[tempKey(subject, inp.dataset.slot)];
+      inp.value = rec ? TemperatureLogic.formatTemp(rec.temp_c) : '';
+      inp.classList.toggle('is-fever', !!rec && TemperatureLogic.isFever(rec.temp_c));
+    }
     async function persistTemperature(row, subject, nameFn, inp) {
       const errEl = row.querySelector('.temp-error');
       errEl.style.display = 'none';
-      if (tempLoadedForDate !== dateEl.value) { refreshTemperatureRow(row); return; } // 日付切替の隙間で別日付に書かない
+      const dateAt = dateEl.value;
+      if (tempLoadedForDate !== dateAt) { refreshTempInput(subject, inp); return; } // 日付切替の隙間で別日付に書かない
       // type=numberは不正な入力（'36e'等）だと value が '' になり空=削除の経路に入ってしまうため、
       // badInput を先に見て既存値を黙って消さないようにする。
-      if (inp.validity && inp.validity.badInput) {
-        errEl.textContent = TemperatureLogic.RANGE_ERROR; errEl.style.display = '';
-        return;
-      }
+      if (inp.validity && inp.validity.badInput) { showTempError(row, TemperatureLogic.RANGE_ERROR); return; }
       const n = TemperatureLogic.normalizeTemp(inp.value);
-      if (n.error) { errEl.textContent = n.error; errEl.style.display = ''; return; } // 保存しない・値は欄に残す
+      if (n.error) { showTempError(row, n.error); return; } // 保存しない・値は欄に残す
       const slot = inp.dataset.slot, key = tempKey(subject, slot), prev = tempRecords[key];
-      if ((prev ? prev.temp_c : null) === n.value) { refreshTemperatureRow(row); return; }
-      const isShortStay = subject.startsWith('__short_stay_');
+      if ((prev ? prev.temp_c : null) === n.value) { refreshTempInput(subject, inp); return; }
       if (n.value === null) {
         if (!prev) return;
         const { error } = await db.from('temperature_records').delete().eq('id', prev.id);
-        if (error) { errEl.textContent = '保存できませんでした。通信を確認してもう一度お試しください'; errEl.style.display = ''; refreshTemperatureRow(row); return; }
-        delete tempRecords[key]; refreshTemperatureRow(row); return;
+        if (tempLoadedForDate !== dateAt || dateEl.value !== dateAt) return;
+        if (error) { showTempError(row, TEMP_SAVE_ERROR); refreshTempInput(subject, inp); return; }
+        delete tempRecords[key]; refreshTempInput(subject, inp); return;
       }
-      const payload = { gh_num: parseInt(ghNum), report_date: dateEl.value, slot, temp_c: n.value, resident_name: nameFn(), updated_at: new Date().toISOString(),
-        resident_id: isShortStay ? null : parseInt(subject, 10), short_stay_key: isShortStay ? subject : null };
+      const payload = Object.assign(tempPayloadBase(subject, nameFn, dateAt), { slot, temp_c: n.value });
       const { data, error } = await db.from('temperature_records')
         .upsert(payload, { onConflict: 'gh_num,report_date,subject_key,slot' })
         .select('id, temp_c').single();
-      if (error) { errEl.textContent = '保存できませんでした。通信を確認してもう一度お試しください'; errEl.style.display = ''; refreshTemperatureRow(row); return; }
+      if (tempLoadedForDate !== dateAt || dateEl.value !== dateAt) return; // 往復の間に日付が変わった＝その日付の読み込みに任せる
+      if (error) { showTempError(row, TEMP_SAVE_ERROR); refreshTempInput(subject, inp); return; }
       tempRecords[key] = { id: data.id, temp_c: Number(data.temp_c) };
-      refreshTemperatureRow(row);
+      refreshTempInput(subject, inp);
     }
     const BOWEL_DRAFT_KEY_PREFIX = 'bowel_draft_';  // localStorage: `${prefix}${ghNum}_${dateISO}_${residentId}`
 
