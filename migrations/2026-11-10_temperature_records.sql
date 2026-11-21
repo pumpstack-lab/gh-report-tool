@@ -10,7 +10,7 @@ create table if not exists temperature_records (
   gh_num         integer not null,
   report_date    date not null,
   resident_id    bigint references residents(id),
-  short_stay_key text,                                  -- '__short_stay_1__' / '__short_stay_2__'
+  short_stay_key text check (short_stay_key is null or short_stay_key in ('__short_stay_1__','__short_stay_2__')),
   -- PostgRESTのupsert(onConflict)はwhere付きの部分一意索引をarbiterにできず本番で42P10になるため、
   -- resident_id/short_stay_keyのどちらかを1本の式にまとめた生成列で一意索引を作る。
   subject_key    text generated always as (coalesce(resident_id::text, short_stay_key)) stored not null,
@@ -31,5 +31,7 @@ create policy authenticated_all on temperature_records for all to authenticated 
 
 -- ─── 適用後の確認（Getter 本体・本番） ───
 --   \d temperature_records ／ select polname from pg_policies where tablename='temperature_records';  -- authenticated_all 1件
---   ログインしていない鍵で読むと拒否・書くと拒否になること
+--   適用の前：select to_regclass('public.temperature_records') が空であること（古い定義の表が残っていると if not exists で素通りする）
+--   ログインしていない鍵で読むと 0 行・書くと拒否になること
+--   ログイン済みで 1 件入れる→読む→消す が通ること（夕・朝・時刻つきの 3 種）
 --   もう一度流してエラーにならないこと（冪等）

@@ -647,6 +647,81 @@ def case18_sibling_not_wiped(pw):
     return ok
 
 
+def case19_quiet_save_while_typing(pw):
+    print("\n--- ケース19: 欄を離れなくても、打鍵が止まって 1.5 秒で保存・打っている欄の数字は書き換えない・途中の数字で注意文を出さない ---")
+    browser = pw.chromium.launch()
+    page = new_page(browser)
+    calls = setup_routes(page)
+    goto_loaded(page)
+    row = first_resident_row(page)
+    inp = row.locator('.temp-input[data-slot="evening"]')
+    inp.click()
+    page.keyboard.type("3")
+    page.wait_for_timeout(1900)
+    err_mid = row.locator('.temp-error').is_visible()
+    w0 = len([c for c in calls if c["method"] in ("POST", "PATCH", "DELETE")])
+    page.keyboard.type("6")
+    page.wait_for_timeout(1900)
+    w1 = [c["body"].get("temp_c") for c in calls if c["method"] in ("POST", "PATCH")]
+    shown = inp.input_value()
+    page.keyboard.type(".5")
+    page.wait_for_timeout(1900)
+    w2 = [c["body"].get("temp_c") for c in calls if c["method"] in ("POST", "PATCH")]
+    focused = page.evaluate("document.activeElement && document.activeElement.dataset.slot")
+    ok = (not err_mid and w0 == 0 and w1 == [36] and shown == "36" and w2 == [36, 36.5]
+          and inp.input_value() == "36.5" and focused == "evening")
+    record("打ったまま止まると静かに保存・途中の「3」では注意も保存もなし・「36」が「36.0」に化けない", ok,
+           f"err_mid={err_mid} w0={w0} w1={w1} shown={shown} w2={w2} focused={focused}")
+    browser.close()
+    return ok
+
+
+def case20_flush_on_leave(pw):
+    print("\n--- ケース20: 打ってすぐ画面を離れる（1.5 秒待たない）→ 離れる合図で保存が飛ぶ・測り直しの行も同じ ---")
+    browser = pw.chromium.launch()
+    page = new_page(browser)
+    calls = setup_routes(page)
+    goto_loaded(page)
+    row = first_resident_row(page)
+    row.locator('.temp-input[data-slot="morning"]').click()
+    page.keyboard.type("36.7")
+    row.locator('.temp-add-btn').click()
+    ex = row.locator('.temp-extra').last
+    ex.locator('.temp-extra-time').fill("21:10")
+    ex.locator('.temp-extra-temp').click()
+    page.keyboard.type("38.2")
+    before = len([c for c in calls if c["method"] in ("POST", "PATCH") and c["body"].get("slot") == "21:10"])
+    page.evaluate("""() => { Object.defineProperty(document, 'hidden', { configurable: true, get: () => true });
+      document.dispatchEvent(new Event('visibilitychange')); }""")
+    page.wait_for_timeout(400)
+    got = sorted((c["body"].get("slot"), c["body"].get("temp_c")) for c in calls if c["method"] in ("POST", "PATCH"))
+    ok = before == 0 and ("21:10", 38.2) in got and ("morning", 36.7) in got
+    record("画面を離れる合図で、欄を離れていない体温も保存される", ok, f"before={before} got={got}")
+    browser.close()
+    return ok
+
+
+def case21_summary_no_html(pw):
+    print("\n--- ケース21: まとめ表示は本文・短期入所の氏名・不足品を HTML として解釈しない ---")
+    browser = pw.chromium.launch()
+    page = new_page(browser)
+    setup_routes(page)
+    goto_loaded(page)
+    evil = '<img src=x onerror="window.__xss=(window.__xss||0)+1">'
+    page.locator('.resident-entry textarea').first.fill("本文" + evil + " <b>太字ではない</b>")
+    page.locator('.short-stay-entry input').first.fill("短期" + evil)
+    page.evaluate("showSummary()")
+    page.wait_for_timeout(400)
+    body = page.locator('#summary-body')
+    text = body.inner_text()
+    fired = page.evaluate("window.__xss || 0")
+    ok = (body.locator('img').count() == 0 and body.locator('b').count() == 0 and fired == 0
+          and "本文<img src=x" in text and "短期<img src=x" in text and "<b>太字ではない</b>" in text)
+    record("まとめ表示で仕掛けの文字が動かず、文字のまま読める", ok, f"img={body.locator('img').count()} b={body.locator('b').count()} fired={fired}")
+    browser.close()
+    return ok
+
+
 def screenshot_widths(pw):
     print("\n--- スクリーンショット（3幅・夕 37.8・朝 36.5・追加の測定 2 件） ---")
     browser = pw.chromium.launch()
@@ -689,7 +764,8 @@ def main():
             extra = [case10_extra_add(pw), case11_extra_half_no_write(pw), case12_extra_prefill_sorted(pw),
                      case13_extra_edit(pw), case14_extra_duplicate_time(pw), case15_extra_delete_confirm(pw),
                      case16_labels_and_dotless(pw), case17_extra_disabled_and_width(pw),
-                     case18_sibling_not_wiped(pw)]
+                     case18_sibling_not_wiped(pw), case19_quiet_save_while_typing(pw), case20_flush_on_leave(pw),
+                     case21_summary_no_html(pw)]
             screenshot_widths(pw)
     finally:
         server.terminate()
@@ -702,7 +778,7 @@ def main():
         print(f"[{mark}] {name}")
         if not ok:
             all_ok = False
-    labels = [f"ケース{i}" for i in range(1, 19)]
+    labels = [f"ケース{i}" for i in range(1, 22)]
     rs = [r1, r2, r3, r4, r5, r6, r7, r8, r9] + extra
     print("\n" + " / ".join(f"{l}: {'PASS' if r else 'FAIL'}" for l, r in zip(labels, rs)))
     sys.exit(0 if all_ok else 1)
