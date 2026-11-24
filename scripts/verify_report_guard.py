@@ -172,6 +172,15 @@ def setup_routes(page, *, reports_delay_ms=0, reports_fail=False, report_row=Non
 
         route.fulfill(status=200, content_type="application/json", body="[]")
 
+    # ログインの門（2026-09-09 導入）を通す。ほかの台本と同じ見本のログイン情報を入れる（これが無く、門の前で止まっていた・2026-11-24）
+    fake_session = {
+        "access_token": "fake-token", "token_type": "bearer", "expires_in": 3600,
+        "expires_at": int(time.time()) + 3600, "refresh_token": "fake-refresh",
+        "user": {"id": "11111111-1111-1111-1111-111111111111", "email": "staff@example.com"},
+    }
+    page.add_init_script(
+        "window.localStorage.setItem('sb-vqeoutrlvdydxenaspas-auth-token', " + json.dumps(json.dumps(fake_session)) + ");")
+    page.route("**/auth/v1/**", lambda r: r.fulfill(status=200, content_type="application/json", body=json.dumps(fake_session)))
     page.route("**/rest/v1/**", handle_rest)
     return write_requests
 

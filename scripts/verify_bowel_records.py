@@ -585,6 +585,9 @@ def case16_none_not_set_when_other_device_recorded(pw):
     # 画面を開いた後に別の端末で記録が入った状態を作る
     rows.append({"id": 9, "resident_id": 101, "kind": "record", "recorded_at": "07:10",
                  "stool_type": "軟便", "amount": "少量", "place": "パッド内", "sort_order": 0})
+    # 入浴の行が増えて「排便なし」が画面の下端に来るようになった。下に固定の「まとめを見る／Word出力」の帯があるので、
+    # 端に寄せたまま押すと帯を押してしまう。画面の中央に寄せてから押す（2026-11-24）
+    page.locator(".bowel-none-checkbox").first.evaluate("e => e.scrollIntoView({block: 'center'})")
     page.locator(".bowel-none-checkbox").first.check(force=True)
     page.wait_for_timeout(500)
     none_posts = [c for c in calls if c["method"] == "POST" and (c["body"] or {}).get("kind") == "none"]

@@ -12,6 +12,7 @@
   <script src="scripts/diaper_stock_label.js?v=2"></script>
   <script src="scripts/report_guard.js?v=2"></script>
   <script src="scripts/temperature_logic.js?v=2"></script>
+  <script src="scripts/bath_logic.js?v=2"></script>
   <script src="scripts/report_patch.js?v=2"></script>
   <script src="scripts/save_retry.js?v=1"></script>
   <script src="scripts/report_draft.js?v=1"></script>
@@ -573,6 +574,21 @@
     .temp-add-btn:disabled, .temp-extra-del:disabled { opacity:.5; }
     .temp-error { flex-basis:100%; font-size:12px; color:#c0392b; }
     .temp-unavailable { flex-basis:100%; font-size:12px; color:#c0392b; }
+    /* 入浴の記録（マハロ）。設計: docs/superpowers/specs/2026-11-24-bath-records-design.md */
+    .bath-row { display:flex; flex-direction:column; gap:8px; margin-top:10px; padding-top:10px; border-top:1px dashed #d9c7b8; font-size:13px; }
+    .bath-top { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+    .bath-label { font-weight:bold; color:#c2570c; }
+    .bath-select { min-height:44px; padding:8px 6px; font-size:16px; font-family:inherit; border:1px solid #d9c7b8; border-radius:8px; background:#fff; color:#333; }
+    .bath-select:disabled { background:#f3efeb; color:#999; }
+    .bath-mins { font-size:15px; font-weight:bold; color:#1e7a44; }
+    .bath-saved { font-size:11px; color:#1e7a44; }
+    .bath-times { display:flex; flex-direction:column; gap:6px; }
+    .bath-trow { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+    .bath-trow-label { width:2.6em; color:#666; }
+    .bath-msg { font-size:12px; border-radius:6px; padding:4px 8px; }
+    .bath-msg.is-hint { color:#666; background:#f3efeb; }
+    .bath-msg.is-warn { color:#7a5200; background:#fff4d6; }
+    .bath-msg.is-error { color:#c0392b; background:#fdecea; }
   </style>
 </head>
 <body>
@@ -857,8 +873,9 @@
         '.diaper-stepper-btn, #photo-upload-area, .btn-remove-photo, ' +
         '.bowel-add-btn, .bowel-none-checkbox, .bowel-row-del-btn, ' +
         '.bowel-hour-select, .bowel-minute-select, .bowel-stool-select, .bowel-amount-select, .bowel-place-select, ' +
-        '.patrol-checkbox, .patrol-copy-btn, .temp-input, .temp-extra-time, .temp-extra-del, .temp-add-btn'
+        '.patrol-checkbox, .patrol-copy-btn, .temp-input, .temp-extra-time, .temp-extra-del, .temp-add-btn, .bath-select'
       ).forEach(el => {
+        if (el.classList.contains('bath-select')) { el.disabled = isDisabled || bathLoadedForDate !== dateEl.value; return; }
         // 見回りは読み込みが終わっていない/失敗している間は有効化しない（renderPatrolBlock と同じ条件）
         if (el.classList.contains('patrol-checkbox')) { el.disabled = isDisabled || !patrolLoadedForDate; return; }
         if (el.matches('.temp-input, .temp-extra-time, .temp-extra-del, .temp-add-btn')) { el.disabled = isDisabled || tempLoadedForDate !== dateEl.value; return; }
@@ -1343,6 +1360,172 @@
       tempRecords[key] = { id: data.id, temp_c: Number(data.temp_c) };
       refreshTempInput(subject, inp, quiet);
     }
+    // ─── 入浴の記録（マハロだけ）。設計: docs/superpowers/specs/2026-11-24-bath-records-design.md ───
+    // 1 人 1 日 1 行。選ぶたびに保存する（保存ボタンなし）。開始は時・分がそろった時点で保存し、終了は開始があってから保存する。
+    const BATH_GH_NUM = 6;               // こもれびホームマハロ
+    const bathEnabled = parseInt(ghNum) === BATH_GH_NUM;
+    let bathOrderMax = 0;                // 順番の選択肢の数（その日の枠の数＝入居者＋短期入所①②）
+    let bathLoadedForDate = null;        // 読み込みが完了している日付（未完了/失敗なら null）
+    let bathRecords = {};                // key: subject → {id, kind, bath_order, start_min, end_min}
+    let bathLoadSeq = 0;                 // 日付を素早く切り替えた時に古い応答を捨てるための連番
+    const BATH_SAVE_ERROR = '保存できていません。通信を確認してください（自動でもう一度送ります）';
+    const BATH_SAVE_GIVEUP = '保存できませんでした。通信を確認して、画面を読み込み直してください';
+    const BATH_RETRY_MS = 3000, BATH_RETRY_MAX = 3; // 保存に失敗した時の自動の送り直し
+    async function loadBathRecords(dateISO) {
+      if (!bathEnabled) return;          // マハロ以外は取りに行かない（往復を増やさない）
+      const seq = ++bathLoadSeq;
+      bathLoadedForDate = null; bathRecords = {};
+      const { data, error } = await db.from('bath_records')
+        .select('id, resident_id, short_stay_key, kind, bath_order, start_min, end_min')
+        .eq('gh_num', parseInt(ghNum)).eq('report_date', dateISO);
+      if (seq !== bathLoadSeq) return;   // 後から始まった読み込みが正
+      if (error) { console.error('bath_records load failed:', error.message); return; } // 表が無くても日報は止めない
+      (data || []).forEach(r => { bathRecords[r.resident_id != null ? String(r.resident_id) : r.short_stay_key] = r; });
+      bathLoadedForDate = dateISO;
+    }
+    function bathSelectHtml(cls, label, placeholder, values, textFn) {
+      return `<select class="bath-select ${cls}" aria-label="${label}" disabled><option value="">${placeholder}</option>${values.map(v => `<option value="${v}">${textFn(v)}</option>`).join('')}</select>`;
+    }
+    /** subject: 利用者は String(resident_id)、短期入所は '__short_stay_N__'。nameFn: 保存時の表示名を返す関数 */
+    function renderBathRow(container, subject, nameFn) {
+      if (!bathEnabled) return null;
+      const row = document.createElement('div');
+      row.className = 'bath-row'; row.dataset.subject = subject; row._bathNameFn = nameFn;
+      const hourSel = (cls, label) => bathSelectHtml(cls, label, '時', BathLogic.HOURS, h => `${h}時`);
+      const minSel = (cls, label) => bathSelectHtml(cls, label, '分', BathLogic.MINUTES, m => `${String(m).padStart(2, '0')}分`);
+      row.innerHTML = `
+        <div class="bath-top">
+          <span class="bath-label">入浴</span><span class="temp-date bath-date"></span>
+          <select class="bath-select bath-choice" aria-label="入浴の順番" disabled>
+            <option value="">選ぶ</option>
+            ${BathLogic.orderChoices(bathOrderMax).map(n => `<option value="${n}">${n}番</option>`).join('')}
+            <option value="facility">事業所で入浴</option>
+            <option value="none">入浴なし</option>
+          </select>
+          <span class="bath-mins"></span>
+          <span class="bath-saved" style="display:none">✓ 保存しました</span>
+        </div>
+        <div class="bath-times">
+          <div class="bath-trow"><span class="bath-trow-label">開始</span>${hourSel('bath-sh', '入浴を始めた時')}${minSel('bath-sm', '入浴を始めた分')}</div>
+          <div class="bath-trow"><span class="bath-trow-label">終了</span>${hourSel('bath-eh', '入浴を終えた時')}${minSel('bath-em', '入浴を終えた分')}</div>
+        </div>
+        <div class="bath-msg bath-msg-main" style="display:none"></div>
+        <div class="bath-msg is-warn bath-msg-dup" style="display:none"></div>
+        <div class="bath-msg is-error bath-unavailable" style="display:none">入浴を読み込めませんでした。再読み込みしてください</div>`;
+      row.addEventListener('change', (ev) => {
+        if (!ev.target.classList.contains('bath-select')) return;
+        // 開始の「時」を選んだら、空の終了の「時」だけ同じ時にする（分は入れない＝終了を勝手に完成させない）
+        if (ev.target.classList.contains('bath-sh') && ev.target.value !== '') {
+          const eh = row.querySelector('.bath-eh'); if (eh.value === '') eh.value = ev.target.value;
+        }
+        // 順番を「選ぶ／事業所で入浴／入浴なし」にした時は時刻を空にする（保存先でも時刻は消える。見えない所に前の時刻を残さない）
+        if (ev.target.classList.contains('bath-choice') && !/^\d+$/.test(ev.target.value)) {
+          row.querySelectorAll('.bath-sh, .bath-sm, .bath-eh, .bath-em').forEach(el => { el.value = ''; });
+        }
+        row.querySelector('.bath-saved').style.display = 'none';
+        row._bathRetry = 0;
+        updateBathRowView(row);
+        refreshBathDuplicates();
+        persistBath(row);
+      });
+      container.appendChild(row);
+      refreshBathRow(row);
+      return row;
+    }
+    function bathStateOf(row) {
+      const num = (cls) => { const v = row.querySelector(cls).value; return v === '' ? null : Number(v); };
+      return { choice: row.querySelector('.bath-choice').value, sh: num('.bath-sh'), sm: num('.bath-sm'), eh: num('.bath-eh'), em: num('.bath-em') };
+    }
+    /** 時刻欄の出し入れ・かかった分・注意文を、いまの選択に合わせる（保存はしない） */
+    function updateBathRowView(row) {
+      const state = bathStateOf(row), d = BathLogic.decide(state);
+      const isOrder = /^\d+$/.test(state.choice);
+      // 時刻欄は最初から見せる（番号を選ぶまで隠すと「時刻はどこから入れるのか」が分からない・2026-11-24 オーナー指摘）。
+      // 事業所で入浴・入浴なしの時だけ隠す
+      row.querySelector('.bath-times').style.display = (isOrder || state.choice === '') ? '' : 'none';
+      row.querySelector('.bath-mins').textContent = d.minutes != null ? `${d.minutes}分` : '';
+      const msg = row.querySelector('.bath-msg-main');
+      const text = d.error || d.hint || d.warn || '';
+      msg.textContent = text; msg.style.display = text ? '' : 'none';
+      msg.className = `bath-msg bath-msg-main ${d.error ? 'is-error' : (d.hint ? 'is-hint' : 'is-warn')}`;
+    }
+    /** 保存済みの値に画面を合わせる（読み込み完了時だけ呼ぶ） */
+    function refreshBathRow(row) {
+      const ready = bathLoadedForDate === dateEl.value;
+      // 日報の日付＝朝の日付。夕方の入浴は前日の夕方（検温の「夕 月/日」と同じ見せ方）
+      const bathDates = TemperatureLogic.slotDateLabels(dateEl.value);
+      row.querySelector('.bath-date').textContent = bathDates.evening ? `${bathDates.evening}夕〜${bathDates.morning}朝` : '';
+      const state = BathLogic.stateFromRecord(bathRecords[row.dataset.subject]);
+      const set = (cls, v) => { row.querySelector(cls).value = v == null ? '' : String(v); };
+      // 保存済みの順番が今の選択肢より大きい（入居者が減った後など）時は、その番号を選択肢に足す（「選ぶ」に見えて記録が無いと誤解させない）
+      const choiceSel = row.querySelector('.bath-choice');
+      if (/^\d+$/.test(state.choice) && !Array.from(choiceSel.options).some(o => o.value === state.choice)) {
+        const opt = document.createElement('option'); opt.value = state.choice; opt.textContent = `${state.choice}番`;
+        choiceSel.insertBefore(opt, choiceSel.querySelector('option[value="facility"]'));
+      }
+      set('.bath-choice', state.choice); set('.bath-sh', state.sh); set('.bath-sm', state.sm); set('.bath-eh', state.eh); set('.bath-em', state.em);
+      row.querySelectorAll('.bath-select').forEach(el => { el.disabled = !ready; });
+      row.querySelector('.bath-saved').style.display = 'none';
+      row.querySelector('.bath-unavailable').style.display = bathLoadedForDate ? 'none' : '';
+      updateBathRowView(row);
+    }
+    function refreshBathDuplicates() {
+      const rows = Array.from(document.querySelectorAll('.bath-row'));
+      const dup = BathLogic.duplicateOrders(rows.map(r => r.querySelector('.bath-choice').value));
+      rows.forEach(r => {
+        const el = r.querySelector('.bath-msg-dup'), c = r.querySelector('.bath-choice').value;
+        const on = dup.includes(c);
+        el.textContent = on ? `${c}番がほかの方と重なっています` : ''; el.style.display = on ? '' : 'none';
+      });
+    }
+    function refreshAllBathRows() {
+      document.querySelectorAll('.bath-row').forEach(refreshBathRow);
+      refreshBathDuplicates();
+    }
+    /** 1 人ぶんの保存。続けて選んだ時は順に 1 本ずつ送り、最後の選択が残るようにする（往復の追い越し防止） */
+    async function persistBath(row) {
+      row._bathDirty = true;
+      if (row._bathBusy) return;
+      row._bathBusy = true;
+      try {
+        while (row._bathDirty) { row._bathDirty = false; await saveBathOnce(row); }
+      } finally { row._bathBusy = false; }
+    }
+    async function saveBathOnce(row) {
+      const subject = row.dataset.subject, dateAt = dateEl.value;
+      if (bathLoadedForDate !== dateAt) return; // 日付切替の隙間で別日付に書かない
+      const d = BathLogic.decide(bathStateOf(row)), prev = bathRecords[subject];
+      const fail = () => {
+        const msg = row.querySelector('.bath-msg-main');
+        row._bathRetry = (row._bathRetry || 0) + 1;
+        const again = row._bathRetry <= BATH_RETRY_MAX;
+        msg.textContent = again ? BATH_SAVE_ERROR : BATH_SAVE_GIVEUP; msg.className = 'bath-msg bath-msg-main is-error'; msg.style.display = '';
+        if (again) setTimeout(() => { if (row.isConnected) persistBath(row); }, BATH_RETRY_MS);
+      };
+      const done = () => { if (row._bathRetry) { row._bathRetry = 0; updateBathRowView(row); } };
+      const stale = () => bathLoadedForDate !== dateAt || dateEl.value !== dateAt; // 往復の間に日付が変わった＝その日付の読み込みに任せる
+      if (d.action === 'none') return;
+      if (d.action === 'delete') {
+        if (!prev) return;
+        const { error } = await db.from('bath_records').delete().eq('id', prev.id);
+        if (stale()) return;
+        if (error) { console.error('bath_records delete failed:', error.message); fail(); return; }
+        delete bathRecords[subject]; done();
+        return;
+      }
+      if (BathLogic.sameFields(d.fields, prev)) { if (!row._bathDirty && !BathLogic.pendingTimes(bathStateOf(row))) row.querySelector('.bath-saved').style.display = ''; return; }
+      const isShortStay = subject.startsWith('__short_stay_');
+      const payload = Object.assign({ gh_num: parseInt(ghNum), report_date: dateAt, resident_name: row._bathNameFn(), updated_at: new Date().toISOString(),
+        resident_id: isShortStay ? null : parseInt(subject, 10), short_stay_key: isShortStay ? subject : null }, d.fields);
+      const { data, error } = await db.from('bath_records')
+        .upsert(payload, { onConflict: 'gh_num,report_date,subject_key' })
+        .select('id, kind, bath_order, start_min, end_min').single();
+      if (stale()) return;
+      if (error) { console.error('bath_records save failed:', error.message); fail(); return; }
+      bathRecords[subject] = data; done();
+      if (!row._bathDirty && !BathLogic.pendingTimes(bathStateOf(row))) row.querySelector('.bath-saved').style.display = '';
+    }
+
     const BOWEL_DRAFT_KEY_PREFIX = 'bowel_draft_';  // localStorage: `${prefix}${ghNum}_${dateISO}_${residentId}`
 
     function bowelDraftKey(dateISO, residentId) {
@@ -3143,10 +3326,11 @@
       await loadBowelRecords(dateISO);
       if (!reportLoadSeq.isCurrent(loadSeq)) return;
       restoreBowelDrafts(dateISO);
-      await Promise.all([loadPatrolRecords(dateISO), loadTemperatureRecords(dateISO)]);
+      await Promise.all([loadPatrolRecords(dateISO), loadTemperatureRecords(dateISO), loadBathRecords(dateISO)]);
       if (!reportLoadSeq.isCurrent(loadSeq)) return;
       rerenderPatrolBlocks();
       refreshAllTemperatureRows();
+      refreshAllBathRows();
       reportLoadedFor = dateISO;
       reportDirty = false; // ここでDOMはサーバー内容と一致済みなので、ロード中の入力(blocked)は破棄してよい
       offerDraftRestore(dateISO, (data && data.residents) || {});
@@ -3377,6 +3561,7 @@
       if (!personalItemsLoaded && !personalItemsUnavailable) {
         loadPersonalItemsOnce();
       }
+      bathOrderMax = residentRows.length + 2; // 入居者＋短期入所①②（入浴の順番の選択肢の数）
       container.innerHTML = '';
       if (residentRows.length === 0) {
         container.innerHTML = `
@@ -3396,6 +3581,7 @@
           `;
           bindBowelTextareaHint(div, r.name);
           renderTemperatureRow(div, String(r.id), () => r.name);
+          renderBathRow(div, String(r.id), () => r.name);
           const bowelBlock = renderBowelSection(div, r.id, r.name);
           bindBowelSectionEvents(bowelBlock);
           const patrolBlock = renderPatrolSection(div, r.id, r.name);
@@ -3429,6 +3615,7 @@
             <textarea placeholder="様子を記入（帰宅〜朝の流れ）..."></textarea>
           `;
           renderTemperatureRow(entry, entry.dataset.shortStayKey, () => entry.querySelector('.short-stay-name-input').value.trim() || `短期入所${['①','②'][n-1]}`);
+          renderBathRow(entry, entry.dataset.shortStayKey, () => entry.querySelector('.short-stay-name-input').value.trim() || `短期入所${['①','②'][n-1]}`);
           entry.querySelector('input').addEventListener('input', scheduleAutoSave);
           entry.querySelector('textarea').addEventListener('input', function() { autoExpand(this); scheduleAutoSave(); });
           section.appendChild(entry);
@@ -3475,10 +3662,11 @@
       // 排便記録はその日付のデータなので日付ごとに取り直す（個人の希望品＝GHごと1回とは異なる）
       await loadBowelRecords(dateISO);
       restoreBowelDrafts(dateISO);
-      await Promise.all([loadPatrolRecords(dateISO), loadTemperatureRecords(dateISO)]);
+      await Promise.all([loadPatrolRecords(dateISO), loadTemperatureRecords(dateISO), loadBathRecords(dateISO)]);
       if (!reportLoadSeq.isCurrent(loadSeq)) return; // 日付が切り替わっていれば、その読み込みに任せる
       rerenderPatrolBlocks();
       refreshAllTemperatureRows();
+      refreshAllBathRows();
       reportLoadedFor = dateISO;
       offerDraftRestore(dateISO, (reportData && reportData.residents) || {});
       setFormInputsDisabled(false);
