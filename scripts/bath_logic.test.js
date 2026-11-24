@@ -48,9 +48,28 @@ test('decide: 日をまたぐ 23:50〜0:10 → 20 分で保存', () => {
   assert.deepEqual(B.decide(st({ choice: '1', sh: 23, sm: 50, eh: 0, em: 10 })),
     { action: 'save', fields: { kind: 'home', bath_order: 1, start_min: 1430, end_min: 10 }, minutes: 20 });
 });
-test('decide: 朝の入浴 7:00〜7:20 は 20 分・朝→夕（7:00〜17:00）は日報の流れに逆らうので保存しない', () => {
+test('decide: 朝の入浴 7:00〜7:20 は 20 分・朝→夕（7:00〜17:00）は 3 時間超えで保存しない', () => {
   assert.equal(B.decide(st({ choice: '1', sh: 7, sm: 0, eh: 7, em: 20 })).minutes, 20);
   assert.deepEqual(B.decide(st({ choice: '1', sh: 7, sm: 0, eh: 17, em: 0 })), { action: 'none', error: B.ORDER_ERROR });
+});
+test('decide: 昼の 15 時をまたぐ 14:50〜15:10 も 20 分で保存', () => {
+  assert.deepEqual(B.decide(st({ choice: '1', sh: 14, sm: 50, eh: 15, em: 10 })),
+    { action: 'save', fields: { kind: 'home', bath_order: 1, start_min: 890, end_min: 910 }, minutes: 20 });
+});
+test('decide: 打ち間違い 17:00〜5:00（12 時間）は保存しない・ちょうど 3 時間は通す・3 時間 10 分は通さない', () => {
+  assert.deepEqual(B.decide(st({ choice: '1', sh: 17, sm: 0, eh: 5, em: 0 })), { action: 'none', error: B.ORDER_ERROR });
+  assert.equal(B.decide(st({ choice: '1', sh: 17, sm: 0, eh: 20, em: 0 })).minutes, 180);
+  assert.deepEqual(B.decide(st({ choice: '1', sh: 17, sm: 0, eh: 20, em: 10 })), { action: 'none', error: B.ORDER_ERROR });
+});
+test('decide: 全部の組み合わせ（144×144）で、保存するのは 10〜180 分の時だけ・分はひと回りの差と一致', () => {
+  let saved = 0;
+  for (let s = 0; s < 1440; s += 10) for (let e = 0; e < 1440; e += 10) {
+    const d = B.decide(st({ choice: '1', sh: Math.floor(s / 60), sm: s % 60, eh: Math.floor(e / 60), em: e % 60 }));
+    const span = (e - s + 1440) % 1440;
+    if (span >= 10 && span <= 180) { assert.equal(d.action, 'save'); assert.equal(d.minutes, span); assert.equal(d.fields.start_min, s); assert.equal(d.fields.end_min, e); saved++; }
+    else assert.deepEqual(d, { action: 'none', error: B.ORDER_ERROR });
+  }
+  assert.equal(saved, 144 * 18);
 });
 test('pendingTimes: 開始がそろう前に時刻のどれかを選んでいる間だけ true', () => {
   assert.equal(B.pendingTimes(st({ choice: '1' })), false);                         // 順番だけ

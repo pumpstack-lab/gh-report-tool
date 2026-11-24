@@ -12,7 +12,7 @@
   <script src="scripts/diaper_stock_label.js?v=2"></script>
   <script src="scripts/report_guard.js?v=2"></script>
   <script src="scripts/temperature_logic.js?v=2"></script>
-  <script src="scripts/bath_logic.js?v=2"></script>
+  <script src="scripts/bath_logic.js?v=3"></script>
   <script src="scripts/report_patch.js?v=2"></script>
   <script src="scripts/save_retry.js?v=1"></script>
   <script src="scripts/report_draft.js?v=1"></script>
@@ -111,6 +111,7 @@
       font-weight: bold;
       white-space: nowrap;
     }
+    #holiday-indicator { white-space: normal; }
     .reporter-input {
       flex: 1;
       padding: 11px 14px;
@@ -1371,12 +1372,16 @@
     const BATH_SAVE_ERROR = '保存できていません。通信を確認してください（自動でもう一度送ります）';
     const BATH_SAVE_GIVEUP = '保存できませんでした。通信を確認して、画面を読み込み直してください';
     const BATH_RETRY_MS = 3000, BATH_RETRY_MAX = 3; // 保存に失敗した時の自動の送り直し
+    const BATH_CONFLICT_NOTE = 'ほかの端末で先に変更されていました。最新の内容を表示しています。必要ならもう一度選んでください';
+    const BATH_DELETE_CONFIRM = 'この方の入浴の記録を消しますか？';
+    const BATH_TIMES_CLEAR_CONFIRM = '入れてある入浴の時刻が消えます。変えますか？';
+    const BATH_COLS = 'id, kind, bath_order, start_min, end_min, updated_at';
     async function loadBathRecords(dateISO) {
       if (!bathEnabled) return;          // マハロ以外は取りに行かない（往復を増やさない）
       const seq = ++bathLoadSeq;
       bathLoadedForDate = null; bathRecords = {};
       const { data, error } = await db.from('bath_records')
-        .select('id, resident_id, short_stay_key, kind, bath_order, start_min, end_min')
+        .select('id, resident_id, short_stay_key, kind, bath_order, start_min, end_min, updated_at')
         .eq('gh_num', parseInt(ghNum)).eq('report_date', dateISO);
       if (seq !== bathLoadSeq) return;   // 後から始まった読み込みが正
       if (error) { console.error('bath_records load failed:', error.message); return; } // 表が無くても日報は止めない
@@ -1418,12 +1423,21 @@
         if (ev.target.classList.contains('bath-sh') && ev.target.value !== '') {
           const eh = row.querySelector('.bath-eh'); if (eh.value === '') eh.value = ev.target.value;
         }
+        // 保存済みの記録がある人を「選ぶ」に戻す＝記録を消す操作。押し間違いで消えないよう確かめる（やめたら保存済みの内容に戻す）
+        if (ev.target.classList.contains('bath-choice') && ev.target.value === '' && bathRecords[row.dataset.subject]) {
+          if (!confirm(BATH_DELETE_CONFIRM)) { refreshBathRow(row); refreshBathDuplicates(); return; }
+        }
+        // 時刻を入れてある人を「事業所で入浴／入浴なし」に変える＝時刻が消える操作。これも確かめる
+        if (ev.target.classList.contains('bath-choice') && (ev.target.value === 'facility' || ev.target.value === 'none')) {
+          const rec = bathRecords[row.dataset.subject];
+          if (rec && rec.start_min != null && !confirm(BATH_TIMES_CLEAR_CONFIRM)) { refreshBathRow(row); refreshBathDuplicates(); return; }
+        }
         // 順番を「選ぶ／事業所で入浴／入浴なし」にした時は時刻を空にする（保存先でも時刻は消える。見えない所に前の時刻を残さない）
         if (ev.target.classList.contains('bath-choice') && !/^\d+$/.test(ev.target.value)) {
           row.querySelectorAll('.bath-sh, .bath-sm, .bath-eh, .bath-em').forEach(el => { el.value = ''; });
         }
         row.querySelector('.bath-saved').style.display = 'none';
-        row._bathRetry = 0;
+        row._bathRetry = 0; row._bathLooseUsed = false; row._bathMineUsed = false; // 選び直したら、送り直しの回数と安全弁を最初から
         updateBathRowView(row);
         refreshBathDuplicates();
         persistBath(row);
@@ -1452,6 +1466,8 @@
     /** 保存済みの値に画面を合わせる（読み込み完了時だけ呼ぶ） */
     function refreshBathRow(row) {
       const ready = bathLoadedForDate === dateEl.value;
+      // 保存済みの内容に画面を合わせ直す時は、送り直しの回数・控え・安全弁も最初からにする（日付を切り替えた先に持ち越さない）
+      row._bathRetry = 0; row._bathErr = false; row._bathSent = []; row._bathLoose = false; row._bathLooseUsed = false; row._bathMineUsed = false;
       // 日報の日付＝朝の日付。夕方の入浴は前日の夕方（検温の「夕 月/日」と同じ見せ方）
       const bathDates = TemperatureLogic.slotDateLabels(dateEl.value);
       row.querySelector('.bath-date').textContent = bathDates.evening ? `${bathDates.evening}夕〜${bathDates.morning}朝` : '';
@@ -1491,39 +1507,109 @@
         while (row._bathDirty) { row._bathDirty = false; await saveBathOnce(row); }
       } finally { row._bathBusy = false; }
     }
+    /** 保存できていない入浴の行を送り直す（自動の送り直しを 3 回で諦めた後でも、通信が戻った時・画面に戻った時にもう一度） */
+    function resendUnsavedBath() {
+      document.querySelectorAll('.bath-row').forEach(row => { if (row._bathRetry) { row._bathRetry = 0; persistBath(row); } });
+    }
+    window.addEventListener('online', resendUnsavedBath);
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) resendUnsavedBath(); });
+
+    /** 1 人ぶんの入浴の記録だけを読み直す（ほかの人の欄・読み込み済みの印には触らない）。返り値 {ok, rec} */
+    async function fetchBathOne(subject, dateAt) {
+      let q = db.from('bath_records').select('id, resident_id, short_stay_key, ' + BATH_COLS)
+        .eq('gh_num', parseInt(ghNum)).eq('report_date', dateAt);
+      q = subject.startsWith('__short_stay_') ? q.eq('short_stay_key', subject) : q.eq('resident_id', parseInt(subject, 10));
+      const { data, error } = await q;
+      if (error) { console.error('bath_records reload failed:', error.message); return { ok: false, rec: null }; }
+      return { ok: true, rec: (data && data[0]) || null };
+    }
     async function saveBathOnce(row) {
       const subject = row.dataset.subject, dateAt = dateEl.value;
       if (bathLoadedForDate !== dateAt) return; // 日付切替の隙間で別日付に書かない
       const d = BathLogic.decide(bathStateOf(row)), prev = bathRecords[subject];
-      const fail = () => {
+      const say = (text, cls) => {
         const msg = row.querySelector('.bath-msg-main');
-        row._bathRetry = (row._bathRetry || 0) + 1;
-        const again = row._bathRetry <= BATH_RETRY_MAX;
-        msg.textContent = again ? BATH_SAVE_ERROR : BATH_SAVE_GIVEUP; msg.className = 'bath-msg bath-msg-main is-error'; msg.style.display = '';
-        if (again) setTimeout(() => { if (row.isConnected) persistBath(row); }, BATH_RETRY_MS);
+        msg.textContent = text; msg.className = `bath-msg bath-msg-main ${cls}`; msg.style.display = '';
       };
-      const done = () => { if (row._bathRetry) { row._bathRetry = 0; updateBathRowView(row); } };
+      const fail = () => {
+        row._bathRetry = (row._bathRetry || 0) + 1; row._bathErr = true;
+        const again = row._bathRetry <= BATH_RETRY_MAX;
+        say(again ? BATH_SAVE_ERROR : BATH_SAVE_GIVEUP, 'is-error');
+        // 送り直しは、失敗した時と同じ日付を開いている間だけ（日付を切り替えた後に、切り替え先の欄として送らない）
+        if (again) setTimeout(() => { if (row.isConnected && dateEl.value === dateAt) persistBath(row); }, BATH_RETRY_MS);
+      };
+      // 保存できた時：失敗の赤字が出ていたら消す（送り直しの回数は別の所で 0 に戻されることがあるので、赤字を出したかどうかで見る）
+      const done = () => { row._bathLooseUsed = false; row._bathMineUsed = false; row._bathSent = []; row._bathRetry = 0; if (row._bathErr) { row._bathErr = false; updateBathRowView(row); } };
       const stale = () => bathLoadedForDate !== dateAt || dateEl.value !== dateAt; // 往復の間に日付が変わった＝その日付の読み込みに任せる
+      const showSaved = () => { if (!row._bathDirty && !BathLogic.pendingTimes(bathStateOf(row))) row.querySelector('.bath-saved').style.display = ''; };
+      const loose = !!row._bathLoose; row._bathLoose = false;   // 安全弁：この 1 回だけ id だけで絞る（下の conflict が立てる）
+      const guard = (q) => loose ? q.eq('id', prev.id) : q.eq('id', prev.id).eq('updated_at', prev.updated_at);
+      /**
+       * 書き換え・削除が 0 件だった／同じ人の行がもうあった時。その人の記録だけ読み直して決める。
+       * wanted: 入れたかった内容（削除の時は null）
+       */
+      const conflict = async (wanted) => {
+        const r = await fetchBathOne(subject, dateAt);
+        if (stale()) return;
+        if (!r.ok) { fail(); return; }             // 読み直せない＝通信の不調。自動の送り直しに任せる
+        const now = r.rec;
+        if (now) bathRecords[subject] = now; else delete bathRecords[subject];
+        // 読み直したら、やりたかったとおりになっていた（送った後の返事だけ届かなかった時の送り直しなど）＝保存できている
+        if (wanted ? (now && BathLogic.sameFields(wanted, now)) : !now) { done(); if (wanted) showSaved(); return; }
+        // 読み直した中身が「この画面が直前に送った物」だった（返事だけ届かず失敗扱いになり、その後に続きを選んだ時）
+        // ＝ほかの端末ではない。知らせを出さず、画面の今の選択をそのまま送り直す
+        // 返事を受け取れていない送信は 1 つとは限らない（失敗→続きを選ぶ→…）ので、控えを全部見る
+        const mine = (row._bathSent || []).some(sent => sent.deleted ? !now
+          : (now && Date.parse(now.updated_at) === Date.parse(sent.stamp) && BathLogic.sameFields(sent.fields, now)));
+        if (mine && !row._bathMineUsed) { row._bathMineUsed = true; row._bathDirty = true; return; }
+        // 誰も変えていない（更新時刻が読んだ時のまま）のに 0 件だった＝更新時刻での絞り込みが効いていない。
+        // 画面の選択は残したまま、次の 1 回だけ id だけで絞って送り直す（保存できなくなるのを避ける安全弁）
+        if (now && prev && now.id === prev.id && now.updated_at === prev.updated_at && !row._bathLooseUsed) {
+          row._bathLoose = true; row._bathLooseUsed = true; row._bathDirty = true;
+          return;
+        }
+        // ほかの端末が先に変えていた：黙って上書きせず、最新を出して知らせる
+        row._bathRetry = 0; row._bathLooseUsed = false; row._bathMineUsed = false; row._bathSent = []; row._bathErr = false;
+        refreshBathRow(row); refreshBathDuplicates();
+        say(BATH_CONFLICT_NOTE, 'is-warn');
+      };
       if (d.action === 'none') return;
+      // 書き換え・削除は「この画面が読んだ時の更新時刻のまま」の行だけに効かせる。0 件なら、ほかの端末が先に変えている
       if (d.action === 'delete') {
         if (!prev) return;
-        const { error } = await db.from('bath_records').delete().eq('id', prev.id);
+        (row._bathSent = row._bathSent || []).push({ deleted: true });
+        const { data, error } = await guard(db.from('bath_records').delete()).select('id');
         if (stale()) return;
         if (error) { console.error('bath_records delete failed:', error.message); fail(); return; }
+        if (!data || data.length === 0) { await conflict(null); return; }
         delete bathRecords[subject]; done();
         return;
       }
-      if (BathLogic.sameFields(d.fields, prev)) { if (!row._bathDirty && !BathLogic.pendingTimes(bathStateOf(row))) row.querySelector('.bath-saved').style.display = ''; return; }
+      if (BathLogic.sameFields(d.fields, prev)) { showSaved(); return; }
       const isShortStay = subject.startsWith('__short_stay_');
-      const payload = Object.assign({ gh_num: parseInt(ghNum), report_date: dateAt, resident_name: row._bathNameFn(), updated_at: new Date().toISOString(),
-        resident_id: isShortStay ? null : parseInt(subject, 10), short_stay_key: isShortStay ? subject : null }, d.fields);
-      const { data, error } = await db.from('bath_records')
-        .upsert(payload, { onConflict: 'gh_num,report_date,subject_key' })
-        .select('id, kind, bath_order, start_min, end_min').single();
-      if (stale()) return;
-      if (error) { console.error('bath_records save failed:', error.message); fail(); return; }
-      bathRecords[subject] = data; done();
-      if (!row._bathDirty && !BathLogic.pendingTimes(bathStateOf(row))) row.querySelector('.bath-saved').style.display = '';
+      const stamp = new Date().toISOString();
+      (row._bathSent = row._bathSent || []).push({ stamp, fields: d.fields });
+      if (row._bathSent.length > 5) row._bathSent = row._bathSent.slice(-5); // 通信の不調が続いても控えを増やし続けない
+      let saved = null;
+      if (prev) {
+        const { data, error } = await guard(db.from('bath_records')
+          .update(Object.assign({ resident_name: row._bathNameFn(), updated_at: stamp }, d.fields))).select(BATH_COLS);
+        if (stale()) return;
+        if (error) { console.error('bath_records save failed:', error.message); fail(); return; }
+        if (!data || data.length === 0) { await conflict(d.fields); return; }
+        saved = data[0];
+      } else {
+        const payload = Object.assign({ gh_num: parseInt(ghNum), report_date: dateAt, resident_name: row._bathNameFn(), updated_at: stamp,
+          resident_id: isShortStay ? null : parseInt(subject, 10), short_stay_key: isShortStay ? subject : null }, d.fields);
+        const { data, error } = await db.from('bath_records').insert(payload).select(BATH_COLS);
+        if (stale()) return;
+        // 同じ人・同じ日の行がもうある（23505）＝ほかの端末が先に入れた
+        if (error && error.code === '23505') { await conflict(d.fields); return; }
+        if (error || !data || data.length === 0) { console.error('bath_records save failed:', error && error.message); fail(); return; }
+        saved = data[0];
+      }
+      bathRecords[subject] = saved; done();
+      showSaved();
     }
 
     const BOWEL_DRAFT_KEY_PREFIX = 'bowel_draft_';  // localStorage: `${prefix}${ghNum}_${dateISO}_${residentId}`

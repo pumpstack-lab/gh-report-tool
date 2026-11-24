@@ -23,8 +23,8 @@ create table if not exists bath_records (
     (kind = 'home' and bath_order is not null)
     or (kind <> 'home' and bath_order is null and start_min is null and end_min is null)),
   constraint bath_records_end_needs_start check (end_min is null or start_min is not null),
-  -- 前後は日報の流れ（15:00 始まり）で比べる＝23:50〜0:10 を通す。(分+540)%1440 が 15:00 からの分
-  constraint bath_records_time_order check (end_min is null or (end_min + 540) % 1440 > (start_min + 540) % 1440)
+  -- かかった分は「終了−開始」を 1 日でひと回りさせて数え、10 分〜3 時間だけ通す（23:50〜0:10・14:50〜15:10 は通す／17:00〜5:00 は拒否）
+  constraint bath_records_time_span check (end_min is null or (end_min - start_min + 1440) % 1440 between 10 and 180)
 );
 create unique index if not exists bath_records_uniq on bath_records (gh_num, report_date, subject_key);
 create index if not exists bath_records_date_idx on bath_records (report_date, gh_num);
@@ -37,5 +37,6 @@ create policy authenticated_all on bath_records for all to authenticated using (
 --   select policyname from pg_policies where tablename='bath_records';  -- authenticated_all 1件
 --   ログインしていない鍵で読むと拒否・書くと拒否になること
 --   ログイン済みの役で home（順番だけ）→開始だけ→終了つき→23:50〜0:10→facility に更新→消す が通ること
---   終了が開始以前・終了だけ・5 分刻み・facility に順番つき は拒否されること
+--   終了が開始以前・3 時間超え・終了だけ・5 分刻み・facility に順番つき は拒否されること
+--   ⚠️ 2026-11-24 の昼に最初の版（制約名 bath_records_time_order）を本番に流し済み。入れ替えは 2026-11-24b_bath_records_time_span.sql
 --   もう一度流してエラーにならないこと（冪等）
