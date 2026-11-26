@@ -1,6 +1,7 @@
 -- 体重記録（月に 1 回）。設計: care-stack-absence/docs/superpowers/specs/2026-11-26-weight-records-design.md
 -- 1 人 1 か月に 1 行（同じ月に入れ直すと上書き）。入力は管理画面だけ（Flask の接続から読み書きする）。
 -- target_month はその月の 1 日。measured_on は実際に測った日（翌月にずれてもよい・月初より前は不可）。
+-- ※ 2026-11-26b で measured_on の意味を「記録した日」に変更（当月分はサーバーが今日を入れる・遡って入れる月は空）。
 -- ホーム番号と氏名の写しは持たない（名簿 residents が正。入居者の削除は active=false で行は残る）。
 -- 非破壊・冪等。⚠️ 本番適用は Getter 本体が行う。
 -- ⚠️ 管理画面（Flask）と同じ接続の役で流すこと（表の持ち主は RLS の対象外。別の役で作ると Flask から読めなくなる）。
