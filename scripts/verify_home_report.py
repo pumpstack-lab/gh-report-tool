@@ -434,8 +434,18 @@ def run_engine(pw, engine):
         page.evaluate("(() => { window.__printed = 0; window.print = () => { window.__printed++; }; })()")   # 開き直したので付け直す
         page.click("#btn-print")
         page.wait_for_timeout(600)
-        check("印刷 → 紙に写真が入り、読み込んでから印刷が始まる",
-              page.evaluate("window.__printed") == 1 and page.evaluate("[...document.querySelectorAll('#p-photos img')].map(i => i.naturalWidth > 0).join()") == "true")
+        check("印刷 → 紙は本文だけ（写真は載せない）",
+              page.evaluate("window.__printed") == 1 and page.locator("#sheet img").count() == 0
+              and page.evaluate("document.getElementById('p-body').textContent") == "写真つきの見本")
+        with page.expect_popup() as pop:
+            page.click(".ph img")
+        check("見本を押すと、別の画面で大きく見られる", "/object/sign/" in pop.value.url)
+        pop.value.close()
+        n_sign = len(mock.signs)
+        page.evaluate("refreshOldPhotoUrls(0)")
+        page.wait_for_timeout(500)
+        check("開いたまま時間が経った写真は、住所を作り直して見られるまま",
+              len(mock.signs) == n_sign + 1 and page.evaluate("document.querySelector('.ph img').naturalWidth") > 0)
         page.click(".ph button")
         check("✕ で外す → 0 枚・まだ保存していない印", page.locator(".ph").count() == 0 and "まだ保存していません" in page.inner_text("#mode-text"))
         page.click("#btn-save")
@@ -523,8 +533,6 @@ def make_pdf(pw, out):
     mock = Mock([])
     ctx, page, _ = open_page(browser, mock)
     page.evaluate("(() => { window.print = () => {}; })()")
-    page.set_input_files("#in-photo", [photo_file("1.png", 1600, 1200), photo_file("2.png", 1200, 1600), photo_file("3.png", 1600, 900)])
-    page.wait_for_timeout(1500)
     long_body = "　本日の報告です（これは見本の文章で、中身は架空です）。\n\n" + "\n".join(
         f"{i}．見本の文章です。ここに報告の内容が入ります。長い行は紙の幅で折り返されます。" for i in range(1, 9)) + "\n\n以上、報告します。"
     fill_form(page, gh="3", reporter="見本 太郎", body=long_body, date="2026-05-20")

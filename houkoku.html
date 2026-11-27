@@ -52,7 +52,7 @@
     @media (max-width: 480px) { .photos { grid-template-columns: repeat(2, 1fr); } }
     .photos:empty { display: none; }
     .ph { position: relative; aspect-ratio: 4 / 3; border-radius: 10px; overflow: hidden; background: #eef1f4; border: 2px solid #dfe6ec; }
-    .ph img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .ph img { width: 100%; height: 100%; object-fit: cover; display: block; cursor: zoom-in; }
     .ph button {
       position: absolute; top: 0; right: 0; width: 44px; height: 44px; border: 0; cursor: pointer;
       background: rgba(26,42,58,0.72); color: #fff; font-size: 18px; font-weight: bold; border-bottom-left-radius: 10px; font-family: inherit;
@@ -123,12 +123,6 @@
       #sheet .date { font-size: 14pt; line-height: 1.3; white-space: nowrap; }
       #sheet .reporter { font-size: 11pt; text-align: right; margin-top: 5mm; }
       #sheet .body { font-size: 12pt; line-height: 1.8; margin-top: 3mm; white-space: pre-wrap; overflow-wrap: anywhere; }
-      #sheet .pphotos { margin-top: 5mm; font-size: 0; }
-      #sheet .pphotos img {
-        display: inline-block; width: 88mm; height: 66mm; object-fit: contain; margin: 0 3mm 3mm 0;
-        border: 0.5pt solid #999; break-inside: avoid; page-break-inside: avoid; vertical-align: top;
-      }
-      #sheet .pphotos img:nth-child(even) { margin-right: 0; }
     }
   </style>
 </head>
@@ -172,7 +166,7 @@
         <div class="count" id="count"></div>
       </div>
       <div class="field" id="f-photos">
-        <label for="btn-photo">写真（4 枚まで）</label>
+        <label for="btn-photo">写真（4 枚まで・押すと大きく見られます）</label>
         <div class="photos" id="photos"></div>
         <button type="button" class="btn btn-plain" id="btn-photo">📷 写真を選ぶ</button>
         <input type="file" id="in-photo" accept="image/*" multiple hidden>
@@ -188,7 +182,7 @@
         <span></span>
         <button type="button" class="btn btn-danger" id="btn-delete" hidden>この報告書を消す</button>
       </div>
-      <p class="hint">「印刷する」を押すと、保存してから様式どおりの紙（A4）にして出します。写真は本文の下に 2 枚ずつ並びます。管理者・サービス管理責任者・報告者の枠は、印鑑用に空けてあります。</p>
+      <p class="hint">「印刷する」を押すと、保存してから様式どおりの紙（A4）にして出します。写真は紙には載りません（この画面で見られます）。管理者・サービス管理責任者・報告者の枠は、印鑑用に空けてあります。</p>
     </div>
 
     <div class="card">
@@ -224,7 +218,6 @@
         </table>
         <div class="reporter" id="p-reporter"></div>
         <div class="body" id="p-body"></div>
-        <div class="pphotos" id="p-photos"></div>
       </td></tr></tbody>
     </table>
   </div>
@@ -257,6 +250,8 @@
     let busy = false;
     let photos = [];       // 画面に出ている写真 [{path}]
     const photoUrl = {};   // path → 見るための住所（期限つき・DB には入れない）
+    const photoUrlAt = {}; // path → 住所を作った時刻（送ったばかりの写真は端末の中の住所なので持たない）
+    const PHOTO_URL_SEC = 3600, PHOTO_URL_REFRESH_MS = 40 * 60 * 1000;
 
     function todayISO() {
       const t = new Date();
@@ -324,6 +319,7 @@
         const w = document.createElement('div'); w.className = 'ph'; w.dataset.path = p.path;
         const img = document.createElement('img'); img.alt = `写真 ${i + 1}`;
         if (photoUrl[p.path]) img.src = photoUrl[p.path];
+        img.addEventListener('click', () => { if (photoUrl[p.path]) window.open(photoUrl[p.path], '_blank', 'noopener'); });   // 押すと大きく見られる
         const x = document.createElement('button'); x.type = 'button'; x.textContent = '✕';
         x.setAttribute('aria-label', `写真 ${i + 1} を外す`); x.disabled = busy;
         x.addEventListener('click', () => {
@@ -340,12 +336,25 @@
       const need = list.map(p => p.path).filter(path => !photoUrl[path]);
       if (!need.length) return true;
       let res;
-      try { res = await db.storage.from(BUCKET).createSignedUrls(need, 3600); } catch (e) { res = { error: e }; }
+      try { res = await db.storage.from(BUCKET).createSignedUrls(need, PHOTO_URL_SEC); } catch (e) { res = { error: e }; }
       if (res.error || !res.data) return false;
-      res.data.forEach(d => { if (d && d.signedUrl && !d.error) photoUrl[d.path] = d.signedUrl; });
+      res.data.forEach(d => { if (d && d.signedUrl && !d.error) { photoUrl[d.path] = d.signedUrl; photoUrlAt[d.path] = Date.now(); } });
       if (list.some(p => photos.some(q => q.path === p.path))) renderPhotos();
       return need.every(path => photoUrl[path]);
     }
+    /** 開きっぱなしの画面でも写真を見られるように、期限が近い住所を作り直す（事務所のパソコンは開いたままが多い）。 */
+    async function refreshOldPhotoUrls(maxAgeMs) {
+      const old = photos.filter(p => photoUrlAt[p.path] && Date.now() - photoUrlAt[p.path] >= maxAgeMs);
+      if (!old.length) return 0;
+      const keep = {};
+      old.forEach(p => { keep[p.path] = photoUrl[p.path]; delete photoUrl[p.path]; });
+      const ok = await loadPhotoUrls(old);
+      if (!ok) old.forEach(p => { if (!photoUrl[p.path]) photoUrl[p.path] = keep[p.path]; });   // 作り直せなかった時は前の住所のまま
+      return old.length;
+    }
+    setInterval(() => { refreshOldPhotoUrls(PHOTO_URL_REFRESH_MS); }, 5 * 60 * 1000);
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshOldPhotoUrls(PHOTO_URL_REFRESH_MS); });
+
     function shrink(file) {
       return new Promise((resolve, reject) => {
         const img = new Image();
@@ -392,7 +401,7 @@
       updateMode(); saveDraft();
       const notes = [];
       if (files.length > room) notes.push(`写真は ${HR.PHOTO_MAX} 枚までです（${files.length - room} 枚は入れていません）`);
-      if (unread) notes.push(`${unread} 枚は写真として読めませんでした`);
+      if (unread) notes.push(`${unread} 枚は写真として読めませんでした（iPhone の写真は、iPhone から直接選んでください）`);
       if (failed) notes.push(`${failed} 枚は送れませんでした。電波の良い所でもう一度選んでください`);
       setStatus(notes.join('。'), notes.length > 0);
     });
@@ -531,15 +540,6 @@
       $('p-home').textContent = HR.homeName(r.gh_num);
       $('p-reporter').textContent = `報告者：${r.reporter}`;
       $('p-body').textContent = r.body;
-      const box = $('p-photos');
-      box.textContent = '';
-      return Promise.all(HR.normPhotos(r.photos).filter(p => photoUrl[p.path]).map(p => new Promise(done => {
-        const img = document.createElement('img');
-        img.alt = '';
-        img.onload = img.onerror = () => done();              // 読めない写真があっても印刷は止めない
-        img.src = photoUrl[p.path];
-        box.appendChild(img);
-      })));
     }
 
     $('btn-save').addEventListener('click', () => { if (!busy) save(); });
@@ -552,9 +552,7 @@
         if (v.error || !confirm('保存できませんでした。保存しないまま、このまま印刷しますか？')) return;
         row = v.value;
       }
-      if (!(await loadPhotoUrls(HR.normPhotos(row.photos)))
-          && !confirm('写真を読み込めませんでした。写真なしで印刷しますか？')) return;
-      await fillSheet(row);
+      fillSheet(row);          // 紙は本文だけ（写真は載せない＝オーナー決定 2026-11-27）
       window.print();
     });
     $('btn-new').addEventListener('click', () => {
