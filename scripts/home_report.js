@@ -16,6 +16,9 @@
   ];
   const REPORTER_MAX = 40;
   const BODY_MAX = 8000;
+  const PHOTO_MAX = 4;
+  // 写真の置き場の中の名前：<報告書の番号>/<写真の番号>.jpg（どちらも画面側で作る uuid）
+  const PHOTO_PATH = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.jpg$/;
   const DAYS = ['日', '月', '火', '水', '木', '金', '土'];
   const REIWA_START = '2019-05-01';
 
@@ -56,6 +59,19 @@
     return normText(v).replace(/\n/g, ' ').trim();
   }
 
+  /** 写真の一覧 → [{path}]（形の正しいものだけ・同じ写真は 1 回だけ・順番はそのまま） */
+  function normPhotos(v) {
+    const out = [], seen = new Set();
+    (Array.isArray(v) ? v : []).forEach(p => {
+      const path = p && typeof p === 'object' ? p.path : null;
+      if (typeof path === 'string' && PHOTO_PATH.test(path) && !seen.has(path)) { seen.add(path); out.push({ path }); }
+    });
+    return out;
+  }
+  function photoKey(v) {
+    return normPhotos(v).map(p => p.path).join('|');
+  }
+
   /** 入力 → {value} か {error, field}。error は最初に見つかった 1 つ。 */
   function validate(input) {
     const src = input || {};
@@ -68,17 +84,20 @@
     const body = normBody(src.body);
     if (!body) return { error: '本文を入れてください', field: 'body' };
     if (body.length > BODY_MAX) return { error: `本文は ${BODY_MAX} 文字までです（今 ${body.length} 文字）`, field: 'body' };
-    return { value: { report_date: String(src.report_date), gh_num: gh, reporter, body } };
+    const photos = normPhotos(src.photos);
+    if (photos.length > PHOTO_MAX) return { error: `写真は ${PHOTO_MAX} 枚までです`, field: 'photos' };
+    return { value: { report_date: String(src.report_date), gh_num: gh, reporter, body, photos } };
   }
 
   /** 画面の中身が、保存済み（無ければ空の新規）と違うか。日付だけの違いは新規では数えない。 */
   function isDirty(current, saved) {
     const c = current || {};
-    if (!saved) return normReporter(c.reporter) !== '' || normBody(c.body) !== '';
+    if (!saved) return normReporter(c.reporter) !== '' || normBody(c.body) !== '' || normPhotos(c.photos).length > 0;
     return String(c.report_date) !== String(saved.report_date)
       || Number(c.gh_num) !== Number(saved.gh_num)
       || normReporter(c.reporter) !== normReporter(saved.reporter)
-      || normBody(c.body) !== normBody(saved.body);
+      || normBody(c.body) !== normBody(saved.body)
+      || photoKey(c.photos) !== photoKey(saved.photos);
   }
 
   /** 一覧の 1 行の見出し（名前は出さない＝報告者は別の欄で出す） */
@@ -88,5 +107,5 @@
     return `${when} ${homeName(row && row.gh_num)}`.trim();
   }
 
-  return { HOMES, REPORTER_MAX, BODY_MAX, isValidDate, formatWareki, homeName, validate, isDirty, listLabel, normBody, normReporter };
+  return { HOMES, REPORTER_MAX, BODY_MAX, PHOTO_MAX, normPhotos, isValidDate, formatWareki, homeName, validate, isDirty, listLabel, normBody, normReporter };
 });

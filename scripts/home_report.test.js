@@ -27,7 +27,7 @@ test('homeName: 1〜6 だけ', () => {
 });
 test('validate: そろっていれば値を整えて返す', () => {
   const r = HR.validate({ report_date: '2026-11-27', gh_num: '3', reporter: '  報告 者  ', body: '本文\r\nです  \n\n' });
-  assert.deepEqual(r, { value: { report_date: '2026-11-27', gh_num: 3, reporter: '報告 者', body: '本文\nです' } });
+  assert.deepEqual(r, { value: { report_date: '2026-11-27', gh_num: 3, reporter: '報告 者', body: '本文\nです', photos: [] } });
 });
 test('validate: 足りない所を欄の名前つきで返す（最初の 1 つ）', () => {
   const ok = { report_date: '2026-11-27', gh_num: 3, reporter: 'あ', body: 'い' };
@@ -53,4 +53,25 @@ test('isDirty: 保存済みと同じなら false（前後の空白・改行の�
 });
 test('listLabel: 一覧の 1 行', () => {
   assert.equal(HR.listLabel({ report_date: '2026-11-27', gh_num: 2, reporter: 'あ' }), '11/27（金） こもれびホーム４');
+});
+
+const P = n => ({ path: `aaaaaaaa-0000-4000-8000-00000000000${n}/bbbbbbbb-0000-4000-8000-00000000000${n}.jpg` });
+test('normPhotos: 形の正しいものだけ・重複は 1 回・順番はそのまま', () => {
+  assert.deepEqual(HR.normPhotos([P(2), { path: '../x.jpg' }, P(1), P(2), null, 'x', { path: 5 }]), [P(2), P(1)]);
+  assert.deepEqual(HR.normPhotos(null), []);
+  assert.deepEqual(HR.normPhotos([{ ...P(1), url: 'https://x' }]), [P(1)]);   // 余分な項目は落とす（期限つきの住所を DB に入れない）
+});
+test('validate: 写真は 4 枚まで・値に入る', () => {
+  const ok = { report_date: '2026-11-27', gh_num: 3, reporter: 'あ', body: 'い' };
+  assert.deepEqual(HR.validate({ ...ok, photos: [P(1), P(2)] }).value.photos, [P(1), P(2)]);
+  assert.ok(HR.validate({ ...ok, photos: [P(1), P(2), P(3), P(4)] }).value);
+  assert.deepEqual(HR.validate({ ...ok, photos: [P(1), P(2), P(3), P(4), P(5)] }), { error: '写真は 4 枚までです', field: 'photos' });
+});
+test('isDirty: 写真の増減・順番の違いを数える', () => {
+  const saved = { report_date: '2026-11-27', gh_num: 3, reporter: 'あ', body: 'い', photos: [P(1), P(2)] };
+  assert.equal(HR.isDirty({ ...saved }, saved), false);
+  assert.equal(HR.isDirty({ ...saved, photos: [P(1)] }, saved), true);
+  assert.equal(HR.isDirty({ ...saved, photos: [P(2), P(1)] }, saved), true);
+  assert.equal(HR.isDirty({ report_date: '2026-11-27', gh_num: '', reporter: '', body: '', photos: [P(1)] }, null), true);
+  assert.equal(HR.isDirty({ ...saved, photos: undefined }, { ...saved, photos: undefined }), false);
 });

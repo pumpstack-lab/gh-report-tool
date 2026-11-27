@@ -8,7 +8,9 @@ python3 -m http.server でローカル配信し、REST応答を全てモック�
   cd "gh-report-tool" && python3 scripts/verify_home_report.py            # chromium + webkit
   python3 scripts/verify_home_report.py --pdf <出力先.pdf>                  # 印刷の見た目を PDF に出す（chromium）
 """
+import io
 import json
+import re
 import subprocess
 import sys
 import time
@@ -57,6 +59,38 @@ class Mock:
         self.fail_list = False
         self.lose_reply = 0       # この回数だけ「DB には入ったが返事が落ちた」をまねる
         self.tick = 0
+        self.files = {}           # 写真の置き場（path → 送られた JPEG）
+        self.uploads = []
+        self.signs = []
+        self.fail_upload = 0
+        self.fail_sign = False
+        for r in self.rows:
+            r.setdefault("photos", [])
+
+    def storage(self, route):
+        """写真の置き場（非公開・期限つきの住所で見る）をまねる。"""
+        req = route.request
+        path = urlparse(req.url).path
+        if req.method == "POST" and "/object/sign/home-report-photos" in path:
+            paths = json.loads(req.post_data or "{}").get("paths", [])
+            self.signs.append(paths)
+            if self.fail_sign:
+                return route.fulfill(status=500, content_type="application/json", body=json.dumps({"message": "mock failure"}))
+            return route.fulfill(status=200, content_type="application/json", body=json.dumps(
+                [{"path": p, "signedURL": f"/object/sign/home-report-photos/{p}?token=t", "error": None} for p in paths]))
+        if req.method == "GET" and "/object/sign/home-report-photos/" in path:
+            return route.fulfill(status=200, content_type="image/png", body=png_bytes(40, 30))
+        if req.method == "POST" and "/object/home-report-photos/" in path:
+            key = path.split("/object/home-report-photos/")[1]
+            self.uploads.append(key)
+            if self.fail_upload > 0:
+                self.fail_upload -= 1
+                return route.fulfill(status=500, content_type="application/json", body=json.dumps({"message": "mock failure"}))
+            raw = req.post_data_buffer or b""
+            a, b = raw.find(b"\xff\xd8"), raw.rfind(b"\xff\xd9")
+            self.files[key] = raw[a:b + 2] if a >= 0 and b > a else b""
+            return route.fulfill(status=200, content_type="application/json", body=json.dumps({"Key": "home-report-photos/" + key, "Id": "x"}))
+        return route.fulfill(status=400, content_type="application/json", body="{}")
 
     def stamp(self):
         self.tick += 1
@@ -116,6 +150,23 @@ class Mock:
         return out({}, 400)
 
 
+def png_bytes(w, h, color=(200, 120, 40)):
+    from PIL import Image
+    buf = io.BytesIO()
+    Image.new("RGB", (w, h), color).save(buf, "PNG")
+    return buf.getvalue()
+
+
+def photo_file(name, w=2000, h=1500):
+    return {"name": name, "mimeType": "image/png", "buffer": png_bytes(w, h)}
+
+
+def jpeg_size(raw):
+    from PIL import Image
+    im = Image.open(io.BytesIO(raw))
+    return im.format, im.size
+
+
 def start_server():
     proc = subprocess.Popen([sys.executable, "-m", "http.server", str(PORT), "--bind", "127.0.0.1"],
                             cwd=str(ROOT), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -135,6 +186,7 @@ def open_page(browser, mock, w=1280, h=900, logged_in=True, path="/houkoku.html"
             + json.dumps(json.dumps(FAKE_SESSION)) + ");")
     page.route("**/auth/v1/**", lambda r: r.fulfill(status=200, content_type="application/json", body=json.dumps(FAKE_SESSION)))
     page.route("**/rest/v1/home_reports**", mock.handle)
+    page.route("**/storage/v1/**", mock.storage)
     page.route("**/rest/v1/reports**", lambda r: r.fulfill(status=200, content_type="application/json", body="[]"))
     page.goto(BASE + path, wait_until="networkidle")
     page.wait_for_timeout(250)
@@ -345,6 +397,84 @@ def run_engine(pw, engine):
         page.wait_for_timeout(500)
         check("保存に失敗しても、確かめた上で印刷はできる", page.evaluate("window.__printed") == 2 and page.evaluate("document.getElementById('p-body').textContent") == "保存できない時の見本")
 
+        # 10b. 写真
+        ctx.close()
+        mock = Mock()
+        ctx, page, errors3 = open_page(browser, mock, w, h)
+        errors += errors3
+        page.evaluate("(() => { window.__printed = 0; window.print = () => { window.__printed++; }; })()")
+        check("写真の欄が最初から見えている（0 / 4 枚）", page.is_visible("#btn-photo") and page.inner_text("#photo-note") == "0 / 4 枚")
+        fill_form(page, gh="2", reporter="見本 五郎", body="写真つきの見本")
+        page.set_input_files("#in-photo", photo_file("a.png"))
+        page.wait_for_timeout(700)
+        PATH = re.compile(r"^[0-9a-f-]{36}/[0-9a-f-]{36}\.jpg$")
+        check("写真を 1 枚選ぶ → 送るのは 1 回・名前は <報告書の番号>/<写真の番号>.jpg", len(mock.uploads) == 1 and bool(PATH.match(mock.uploads[0])), str(mock.uploads)[:60])
+        can_read = bool(mock.files.get(mock.uploads[0]))     # WebKit は、まねの側から送った写真の中身を読めない（道具の制約）
+        if can_read:
+            fmt, size = jpeg_size(mock.files[mock.uploads[0]])
+            check("送る前に縮めている（JPEG・長い辺 1600）", fmt == "JPEG" and size == (1600, 1200), f"{fmt} {size} {len(mock.files[mock.uploads[0]]) // 1024}KB")
+        check("見本が 1 枚出る・「1 / 4 枚」・取り直しに行かない",
+              page.locator(".ph img").count() == 1 and page.inner_text("#photo-note") == "1 / 4 枚" and not mock.signs
+              and page.evaluate("document.querySelector('.ph img').naturalWidth") > 0)
+        check("写真を外すボタンは 44px 以上・横にはみ出さない",
+              page.evaluate("document.querySelector('.ph button').getBoundingClientRect().height") >= 44 and no_overflow(page))
+        page.click("#btn-save")
+        page.wait_for_timeout(450)
+        posted = writes(mock)[-1]["body"]
+        check("保存 → 報告書に写真の名前だけが入る（住所は入れない）",
+              posted.get("photos") == [{"path": mock.uploads[0]}] and status(page) == "保存しました", json.dumps(posted.get("photos"))[:80])
+        check("一覧にも写真の枚数が出る", "📷1" in page.locator(".item .x").first.inner_text())
+        page.reload(wait_until="networkidle")
+        page.wait_for_timeout(300)
+        page.locator(".item").first.click()
+        page.wait_for_timeout(600)
+        check("開き直す → 見るための住所を 1 回で作って見本が出る",
+              mock.signs == [[mock.uploads[0]]] and "/object/sign/" in (page.get_attribute(".ph img", "src") or "")
+              and page.evaluate("document.querySelector('.ph img').naturalWidth") > 0, str(mock.signs)[:60])
+        page.evaluate("(() => { window.__printed = 0; window.print = () => { window.__printed++; }; })()")   # 開き直したので付け直す
+        page.click("#btn-print")
+        page.wait_for_timeout(600)
+        check("印刷 → 紙に写真が入り、読み込んでから印刷が始まる",
+              page.evaluate("window.__printed") == 1 and page.evaluate("[...document.querySelectorAll('#p-photos img')].map(i => i.naturalWidth > 0).join()") == "true")
+        page.click(".ph button")
+        check("✕ で外す → 0 枚・まだ保存していない印", page.locator(".ph").count() == 0 and "まだ保存していません" in page.inner_text("#mode-text"))
+        page.click("#btn-save")
+        page.wait_for_timeout(450)
+        check("外して保存 → 報告書の写真は空（ファイルは置き場に残す＝消す依頼は出さない）",
+              writes(mock)[-1]["body"].get("photos") == [] and len(mock.files) == 1)
+        n_up = len(mock.uploads)
+        page.set_input_files("#in-photo", [photo_file(f"{i}.png", 300, 400) for i in range(5)])
+        page.wait_for_timeout(1500)
+        check("5 枚選ぶ → 4 枚だけ送り、知らせる・選ぶボタンは押せなくなる",
+              len(mock.uploads) == n_up + 4 and page.locator(".ph").count() == 4 and "4 枚まで" in status(page) and page.is_disabled("#btn-photo"), status(page)[:30])
+        if can_read:
+            check("縦長の写真も長い辺で縮める（小さい写真は大きくしない）", jpeg_size(mock.files[mock.uploads[-1]])[1] == (300, 400))
+        page.locator(".ph button").first.click()
+        page.locator(".ph button").first.click()
+        n_up = len(mock.uploads)
+        page.set_input_files("#in-photo", {"name": "memo.png", "mimeType": "image/png", "buffer": b"this is not an image"})
+        page.wait_for_timeout(500)
+        check("写真として読めないファイル → 送らずに知らせる", len(mock.uploads) == n_up and "読めませんでした" in status(page) and page.locator(".ph").count() == 2)
+        mock.fail_upload = 1
+        page.set_input_files("#in-photo", photo_file("b.png", 200, 200))
+        page.wait_for_timeout(600)
+        check("送るのに失敗 → 入れずに知らせる・ほかの欄はそのまま",
+              page.locator(".ph").count() == 2 and "送れませんでした" in status(page) and page.input_value("#in-body") == "写真つきの見本")
+        page.reload(wait_until="networkidle")
+        page.wait_for_timeout(300)
+        page.click("#btn-draft-use")
+        page.wait_for_timeout(600)
+        check("書きかけを戻すと、写真も戻る", page.locator(".ph").count() == 2 and page.evaluate("[...document.querySelectorAll('.ph img')].every(i => i.naturalWidth > 0)"))
+        mock.fail_sign = True
+        page.reload(wait_until="networkidle")
+        page.wait_for_timeout(300)
+        page.once("dialog", lambda d: d.accept())
+        page.click("#btn-draft-drop")
+        page.locator(".item").first.click()
+        page.wait_for_timeout(500)
+        check("写真の住所を作れない時も、画面は使える（本文は開ける）", page.input_value("#in-body") == "写真つきの見本")
+        mock.fail_sign = False
+
         # 11. 一覧が読めない時
         mock.fail_list = True
         page.reload(wait_until="networkidle")
@@ -393,6 +523,8 @@ def make_pdf(pw, out):
     mock = Mock([])
     ctx, page, _ = open_page(browser, mock)
     page.evaluate("(() => { window.print = () => {}; })()")
+    page.set_input_files("#in-photo", [photo_file("1.png", 1600, 1200), photo_file("2.png", 1200, 1600), photo_file("3.png", 1600, 900)])
+    page.wait_for_timeout(1500)
     long_body = "　本日の報告です（これは見本の文章で、中身は架空です）。\n\n" + "\n".join(
         f"{i}．見本の文章です。ここに報告の内容が入ります。長い行は紙の幅で折り返されます。" for i in range(1, 9)) + "\n\n以上、報告します。"
     fill_form(page, gh="3", reporter="見本 太郎", body=long_body, date="2026-05-20")
