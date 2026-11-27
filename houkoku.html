@@ -1,0 +1,467 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ホーム報告書 - こもれびホーム 業務日報</title>
+  <script src="config.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="scripts/auth_gate.js?v=1"></script>
+  <script src="scripts/auth_ui.js?v=1"></script>
+  <script src="scripts/home_report.js?v=20261127a"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    [hidden] { display: none !important; }
+    body {
+      font-family: 'Hiragino Kaku Gothic ProN', 'Meiryo', 'Yu Gothic', sans-serif;
+      background: #f6f1ec;
+      color: #1a2a3a;
+      min-height: 100vh;
+      padding-bottom: 48px;
+    }
+    .page-header {
+      background: #dd6a12; color: white; padding: 14px 20px;
+      display: flex; align-items: center; gap: 12px;
+      position: sticky; top: 0; z-index: 100;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+    }
+    .page-header a { color: white; text-decoration: none; font-size: 26px; line-height: 1; padding: 4px 8px 4px 0; }
+    .page-header h1 { font-size: 18px; font-weight: bold; }
+    .content { padding: 16px; max-width: 680px; margin: 0 auto; }
+
+    .card {
+      background: white; border-radius: 14px; padding: 18px 16px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.06); margin-bottom: 18px;
+    }
+    .mode { font-size: 13px; color: #5a6a7a; margin-bottom: 12px; display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 36px; }
+    .mode strong { color: #c2570c; font-size: 14px; }
+    .field { margin-bottom: 14px; }
+    .field label { display: block; font-size: 14px; font-weight: bold; color: #34495e; margin-bottom: 6px; }
+    .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    @media (max-width: 480px) { .row2 { grid-template-columns: 1fr; gap: 0; } }
+    .field input, .field select, .field textarea {
+      width: 100%; padding: 12px; font-size: 16px; /* 16px 未満は iOS で自動ズームする */
+      font-family: inherit; color: #1a2a3a; background: #fff;
+      border: 2px solid #dfe6ec; border-radius: 10px; min-height: 48px;
+    }
+    .field select { height: 48px; }
+    .field textarea { min-height: 260px; line-height: 1.7; resize: vertical; }
+    .field input:focus, .field select:focus, .field textarea:focus { outline: none; border-color: #dd6a12; }
+    .field.bad input, .field.bad select, .field.bad textarea { border-color: #c0392b; background: #fff6f5; }
+    .count { font-size: 12px; color: #6b7a89; text-align: right; margin-top: 4px; }
+    .count.over { color: #c0392b; font-weight: bold; }
+
+    .actions { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 4px; }
+    .btn {
+      font-family: inherit; font-size: 16px; font-weight: bold; min-height: 52px;
+      border-radius: 12px; border: 2px solid #dd6a12; cursor: pointer; padding: 10px 12px;
+    }
+    .btn-main { background: #dd6a12; color: white; }
+    .btn-sub { background: white; color: #c2570c; }
+    .btn-plain { background: white; color: #5a6a7a; border-color: #dfe6ec; font-size: 14px; min-height: 44px; padding: 8px 14px; }
+    .btn-danger { background: white; color: #c0392b; border-color: #e8c4bf; font-size: 14px; min-height: 44px; padding: 8px 14px; }
+    .btn:disabled { opacity: 0.55; cursor: default; }
+    .status { min-height: 22px; font-size: 14px; margin-top: 12px; color: #1e7d45; }
+    .status.err { color: #c0392b; font-weight: bold; }
+    .foot-actions { display: flex; justify-content: space-between; align-items: center; margin-top: 10px; gap: 10px; }
+    .hint { font-size: 12px; color: #6b7a89; line-height: 1.6; margin-top: 10px; }
+
+    .draft-card { border: 2px solid #dd6a12; background: #fff8f1; }
+    .draft-card p { font-size: 15px; line-height: 1.7; margin-bottom: 12px; }
+    .item .u { font-size: 12px; color: #6b7a89; margin-top: 4px; }
+
+    .list-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 12px; }
+    .list-head h2 { font-size: 16px; color: #34495e; }
+    .list-head select { font-size: 16px; font-family: inherit; padding: 8px 10px; border: 2px solid #dfe6ec; border-radius: 10px; background: #fff; height: 44px; max-width: 60%; }
+    .item {
+      display: block; width: 100%; text-align: left; font-family: inherit; cursor: pointer;
+      background: #fff; border: 2px solid #eee3d8; border-radius: 12px; padding: 12px 14px; margin-bottom: 10px;
+    }
+    .item.current { border-color: #dd6a12; background: #fff8f1; }
+    .item .t { font-size: 15px; font-weight: bold; color: #1a2a3a; }
+    .item .r { font-size: 13px; color: #5a6a7a; margin-top: 2px; }
+    .item .x { font-size: 13px; color: #6b7a89; margin-top: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .empty { text-align: center; color: #6b7a89; font-size: 14px; padding: 18px 0; }
+    .more { display: block; margin: 4px auto 0; }
+
+    /* 印刷用の紙。画面では出さない（寸法は様式の Word ファイルの数値どおり） */
+    #sheet { display: none; }
+    @page { size: A4 portrait; margin: 12mm 9mm 9mm 19mm; }
+    @media print {
+      html, body { background: #fff !important; padding: 0 !important; min-height: 0 !important; }
+      body > *:not(#sheet) { display: none !important; }
+      #sheet {
+        display: block; width: 182.6mm; color: #000;
+        font-family: 'UD デジタル 教科書体 NK-R', 'UD Digi Kyokasho NK-R', 'Hiragino Kaku Gothic ProN', 'Yu Gothic', 'Meiryo', sans-serif;
+      }
+      #sheet table { border-collapse: collapse; table-layout: fixed; width: 182.6mm; }
+      #sheet td { border: 0.5pt solid #000; padding: 0 1.9mm; vertical-align: middle; overflow: hidden; }
+      #sheet .c-title { width: 62.4mm; }
+      #sheet .c-home { width: 75.2mm; text-align: center; font-size: 16pt; line-height: 1.25; }
+      #sheet .c-stamp { width: 15mm; text-align: center; font-size: 10pt; line-height: 1.15; padding: 0; }
+      #sheet .c-stamp.small { font-size: 7pt; }
+      #sheet tr.r1 td { height: 13.8mm; }
+      #sheet tr.r2 td { height: 11.5mm; }
+      #sheet .title { font-size: 22pt; font-weight: bold; line-height: 1.3; padding-left: 7mm; white-space: nowrap; }
+      #sheet .date { font-size: 14pt; line-height: 1.3; white-space: nowrap; }
+      #sheet .reporter { font-size: 11pt; text-align: right; margin-top: 5mm; }
+      #sheet .body { font-size: 12pt; line-height: 1.8; margin-top: 3mm; white-space: pre-wrap; overflow-wrap: anywhere; }
+    }
+  </style>
+</head>
+<body>
+  <div class="page-header">
+    <a href="index.html" aria-label="ホームを選ぶ画面へ戻る">‹</a>
+    <h1>📝 ホーム報告書</h1>
+  </div>
+
+  <div class="content">
+    <div class="card draft-card" id="draft-card" hidden>
+      <p id="draft-text"></p>
+      <div class="actions">
+        <button type="button" class="btn btn-sub" id="btn-draft-drop">捨てる</button>
+        <button type="button" class="btn btn-main" id="btn-draft-use">続きを書く</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="mode">
+        <span id="mode-text"><strong>新しい報告書</strong></span>
+        <button type="button" class="btn btn-plain" id="btn-new" hidden>＋ 新しく書く</button>
+      </div>
+      <div class="row2">
+        <div class="field" id="f-report_date">
+          <label for="in-date">日付</label>
+          <input type="date" id="in-date">
+        </div>
+        <div class="field" id="f-gh_num">
+          <label for="in-gh">ホーム</label>
+          <select id="in-gh"><option value="">選んでください</option></select>
+        </div>
+      </div>
+      <div class="field" id="f-reporter">
+        <label for="in-reporter">報告者</label>
+        <input type="text" id="in-reporter" autocomplete="off" placeholder="書いた人の名前">
+      </div>
+      <div class="field" id="f-body">
+        <label for="in-body">本文</label>
+        <textarea id="in-body" placeholder="報告する内容を書いてください"></textarea>
+        <div class="count" id="count"></div>
+      </div>
+      <div class="actions">
+        <button type="button" class="btn btn-sub" id="btn-save">保存する</button>
+        <button type="button" class="btn btn-main" id="btn-print">🖨 印刷する</button>
+      </div>
+      <div class="status" id="status" role="status" aria-live="polite"></div>
+      <div class="foot-actions">
+        <button type="button" class="btn btn-plain" id="btn-discard" hidden>書きかけを捨てる</button>
+        <span></span>
+        <button type="button" class="btn btn-danger" id="btn-delete" hidden>この報告書を消す</button>
+      </div>
+      <p class="hint">「印刷する」を押すと、保存してから様式どおりの紙（A4）にして出します。管理者・サービス管理責任者・報告者の枠は、印鑑用に空けてあります。</p>
+    </div>
+
+    <div class="card">
+      <div class="list-head">
+        <h2>これまでの報告書</h2>
+        <select id="filter-gh" aria-label="ホームで絞る"><option value="">すべてのホーム</option></select>
+      </div>
+      <div id="list"><div class="empty">読み込んでいます…</div></div>
+      <button type="button" class="btn btn-plain more" id="btn-more" hidden>もっと前の報告書を見る</button>
+    </div>
+  </div>
+
+  <!-- 印刷用の紙（様式：ホーム報告書） -->
+  <div id="sheet" aria-hidden="true">
+    <table>
+      <tr class="r1">
+        <td class="c-title" rowspan="2">
+          <div class="title">ホーム報告書</div>
+          <div class="date" id="p-date"></div>
+        </td>
+        <td class="c-home" rowspan="2" id="p-home"></td>
+        <td class="c-stamp">管理者</td>
+        <td class="c-stamp small">サービス<br>管理<br>責任者</td>
+        <td class="c-stamp">報告者</td>
+      </tr>
+      <tr class="r2">
+        <td class="c-stamp"></td><td class="c-stamp"></td><td class="c-stamp"></td>
+      </tr>
+    </table>
+    <div class="reporter" id="p-reporter"></div>
+    <div class="body" id="p-body"></div>
+  </div>
+
+  <script>
+    const HR = HomeReport;
+    const PAGE = 30;
+    const DRAFT_KEY = 'houkoku_draft_v1';
+    const DRAFT_DAYS = 3;   // 共用の端末に書きかけを残す日数
+    const LAST_GH_KEY = 'houkoku_last_gh';
+    const COLS = 'id,gh_num,report_date,reporter,body,updated_at';
+    const $ = id => document.getElementById(id);
+    const el = { date: $('in-date'), gh: $('in-gh'), reporter: $('in-reporter'), body: $('in-body') };
+
+    const { createClient } = supabase;
+    const db = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+    let saved = null;      // 開いている保存済みの報告書（新規は null）
+    let newId = null;      // 新規の報告書の番号。画面側で先に作る（送り直しで 2 枚できないように）
+    let rows = [];         // 一覧
+    let limit = PAGE;
+    let hasMore = false;
+    let busy = false;
+
+    function todayISO() {
+      const t = new Date();
+      return `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}-${String(t.getDate()).padStart(2, '0')}`;
+    }
+    function store(fn) { try { return fn(window.localStorage); } catch (e) { return null; } }
+    function makeId() {
+      if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
+      const b = new Uint8Array(16);
+      crypto.getRandomValues(b);
+      b[6] = (b[6] & 0x0f) | 0x40; b[8] = (b[8] & 0x3f) | 0x80;
+      const h = Array.from(b, x => x.toString(16).padStart(2, '0')).join('');
+      return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
+    }
+    function stamp(iso) {
+      const d = new Date(iso);
+      if (isNaN(d)) return '';
+      return `${d.getMonth() + 1}/${d.getDate()} ${d.getHours()}:${String(d.getMinutes()).padStart(2, '0')}`;
+    }
+
+    HR.HOMES.forEach(h => {
+      el.gh.add(new Option(h.name, String(h.num)));
+      $('filter-gh').add(new Option(h.name, String(h.num)));
+    });
+
+    function current() {
+      return { report_date: el.date.value, gh_num: el.gh.value, reporter: el.reporter.value, body: el.body.value };
+    }
+    function setStatus(text, isErr) {
+      $('status').textContent = text || '';
+      $('status').classList.toggle('err', !!isErr);
+    }
+    function clearBad() { document.querySelectorAll('.field.bad').forEach(f => f.classList.remove('bad')); }
+    function setBusy(v) {
+      busy = v;
+      ['btn-save', 'btn-print', 'btn-delete', 'btn-new'].forEach(id => { $(id).disabled = v; });
+    }
+    function updateCount() {
+      const n = HR.normBody(el.body.value).length;
+      $('count').textContent = `${n} / ${HR.BODY_MAX} 文字`;
+      $('count').classList.toggle('over', n > HR.BODY_MAX);
+    }
+    function updateMode() {
+      const dirty = HR.isDirty(current(), saved);
+      $('mode-text').innerHTML = saved
+        ? `<strong>保存した報告書を開いています</strong>${dirty ? '（直した所はまだ保存していません）' : ''}`
+        : '<strong>新しい報告書</strong>';
+      $('btn-new').hidden = !saved;
+      $('btn-delete').hidden = !saved;
+      $('btn-discard').hidden = !(dirty && !saved);
+    }
+
+    // 書きかけは端末の中に持つ（保存できたら消す）。閉じても、通信が切れても本文を失わないため。
+    function saveDraft() {
+      if (HR.isDirty(current(), saved)) {
+        store(s => s.setItem(DRAFT_KEY, JSON.stringify({ id: saved ? saved.id : null, newId, at: Date.now(), ...current() })));
+      } else {
+        store(s => s.removeItem(DRAFT_KEY));
+      }
+    }
+    function fill(v) {
+      el.date.value = v.report_date || todayISO();
+      el.gh.value = v.gh_num == null ? '' : String(v.gh_num);
+      el.reporter.value = v.reporter || '';
+      el.body.value = v.body || '';
+      clearBad(); updateCount(); updateMode(); renderList();
+    }
+    function startNew() {
+      saved = null;
+      newId = makeId();
+      fill({ report_date: todayISO(), gh_num: store(s => s.getItem(LAST_GH_KEY)) || '', reporter: '', body: '' });
+    }
+
+    Object.values(el).forEach(input => {
+      const onEdit = () => { $('draft-card').hidden = true; updateCount(); updateMode(); saveDraft(); setStatus(''); input.closest('.field').classList.remove('bad'); };
+      input.addEventListener('input', onEdit);
+      input.addEventListener('change', onEdit);
+    });
+
+    function renderList() {
+      const box = $('list');
+      box.textContent = '';
+      if (!rows.length) {
+        const d = document.createElement('div');
+        d.className = 'empty';
+        d.textContent = 'まだ報告書はありません';
+        box.appendChild(d);
+      }
+      rows.forEach(r => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'item' + (saved && saved.id === r.id ? ' current' : '');
+        b.dataset.id = r.id;
+        const t = document.createElement('div'); t.className = 't'; t.textContent = HR.listLabel(r);
+        const who = document.createElement('div'); who.className = 'r'; who.textContent = `報告者：${r.reporter}`;
+        const x = document.createElement('div'); x.className = 'x'; x.textContent = String(r.body || '').split('\n')[0];
+        const u = document.createElement('div'); u.className = 'u'; u.textContent = `最後に保存：${stamp(r.updated_at)}`;
+        b.append(t, who, x, u);
+        b.addEventListener('click', () => openRow(r));
+        box.appendChild(b);
+      });
+      $('btn-more').hidden = !hasMore;
+    }
+
+    async function loadList() {
+      let q = db.from('home_reports').select(COLS).is('deleted_at', null)
+        .order('report_date', { ascending: false }).order('id', { ascending: false }).limit(limit + 1);
+      const gh = $('filter-gh').value;
+      if (gh) q = q.eq('gh_num', parseInt(gh, 10));
+      const { data, error } = await q;
+      if (error) {
+        $('list').innerHTML = '<div class="empty">一覧を読み込めませんでした。電波の良い所でもう一度開いてください。</div>';
+        $('btn-more').hidden = true;
+        return false;
+      }
+      hasMore = data.length > limit;
+      rows = data.slice(0, limit);
+      renderList();
+      return true;
+    }
+
+    function openRow(r) {
+      if (busy) return;
+      if (saved && saved.id === r.id) return;
+      if (HR.isDirty(current(), saved) && !confirm('書きかけの内容があります。捨てて、選んだ報告書を開きますか？')) return;
+      saved = r;
+      store(s => s.removeItem(DRAFT_KEY));
+      fill(r);
+      setStatus('');
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+
+    /** 保存する。成功なら保存後の行、失敗なら null。 */
+    async function save() {
+      clearBad();
+      const v = HR.validate(current());
+      if (v.error) {
+        setStatus(v.error, true);
+        const f = $('f-' + v.field);
+        f.classList.add('bad');
+        f.querySelector('input, select, textarea').focus();
+        return null;
+      }
+      if (saved && !HR.isDirty(current(), saved)) return saved;
+      setBusy(true);
+      setStatus('保存しています…');
+      let res;
+      try {
+        if (saved) {
+          // 読んだ時の更新時刻で絞る＝ほかの端末で直されていたら 0 件になる
+          res = await db.from('home_reports').update(v.value)
+            .eq('id', saved.id).eq('updated_at', saved.updated_at).is('deleted_at', null).select(COLS);
+        } else {
+          res = await db.from('home_reports').insert({ id: newId, ...v.value }).select(COLS);
+          // 前の送信が届いていて返事だけ落ちた時＝同じ番号がもう在る → その行を直す
+          if (res.error && res.error.code === '23505') {
+            res = await db.from('home_reports').update(v.value).eq('id', newId).is('deleted_at', null).select(COLS);
+          }
+        }
+      } catch (e) { res = { error: e }; }
+      setBusy(false);
+      const row = res && !res.error && Array.isArray(res.data) ? res.data[0] : null;
+      if (!row) {
+        const stale = res && !res.error && saved;
+        setStatus(stale
+          ? 'この報告書は、ほかの端末で直されたか消されています。書いた内容はこの端末に残っています。本文を写してから、画面を開き直してください。'
+          : '保存できませんでした。書いた内容はこの端末に残っています。電波の良い所でもう一度「保存する」を押してください。', true);
+        return null;
+      }
+      saved = row;
+      store(s => { s.removeItem(DRAFT_KEY); s.setItem(LAST_GH_KEY, String(row.gh_num)); });
+      fill(row);
+      setStatus('保存しました');
+      loadList();
+      return row;
+    }
+
+    function fillSheet(r) {
+      $('p-date').textContent = HR.formatWareki(r.report_date);
+      $('p-home').textContent = HR.homeName(r.gh_num);
+      $('p-reporter').textContent = `報告者：${r.reporter}`;
+      $('p-body').textContent = r.body;
+    }
+
+    $('btn-save').addEventListener('click', () => { if (!busy) save(); });
+    $('btn-print').addEventListener('click', async () => {
+      if (busy) return;
+      let row = await save();
+      if (!row) {
+        // 紙が目的なので、保存に失敗しても刷れるようにする（入力の不足は刷らない）
+        const v = HR.validate(current());
+        if (v.error || !confirm('保存できませんでした。保存しないまま、このまま印刷しますか？')) return;
+        row = v.value;
+      }
+      fillSheet(row);
+      window.print();
+    });
+    $('btn-new').addEventListener('click', () => {
+      if (HR.isDirty(current(), saved) && !confirm('直した所を保存していません。捨てて、新しく書きますか？')) return;
+      store(s => s.removeItem(DRAFT_KEY));
+      startNew();
+      setStatus('');
+    });
+    $('btn-discard').addEventListener('click', () => {
+      if (!confirm('書きかけの内容を捨てますか？')) return;
+      store(s => s.removeItem(DRAFT_KEY));
+      startNew();
+      setStatus('');
+    });
+    $('btn-delete').addEventListener('click', async () => {
+      if (busy || !saved) return;
+      if (!confirm(`${HR.listLabel(saved)} の報告書を消します。よろしいですか？`)) return;
+      setBusy(true);
+      let res;
+      // 行は消さない（一覧から隠すだけ）。裏には残る
+      try { res = await db.from('home_reports').update({ deleted_at: new Date().toISOString() }).eq('id', saved.id).select('id'); } catch (e) { res = { error: e }; }
+      setBusy(false);
+      if (res.error || !res.data || !res.data.length) { setStatus('消せませんでした。電波の良い所でもう一度お試しください。', true); return; }
+      store(s => s.removeItem(DRAFT_KEY));
+      startNew();
+      setStatus('消しました');
+      loadList();
+    });
+    $('filter-gh').addEventListener('change', () => { limit = PAGE; loadList(); });
+    $('btn-more').addEventListener('click', () => { limit += PAGE; loadList(); });
+
+    startNew();
+    AuthUI.requireLogin(db).then(async () => {
+      await loadList();
+      const raw = store(s => s.getItem(DRAFT_KEY));
+      let draft = null;
+      try { draft = raw ? JSON.parse(raw) : null; } catch (e) { draft = null; }
+      const fresh = draft && typeof draft.at === 'number' && Date.now() - draft.at < DRAFT_DAYS * 86400000;
+      if (!fresh || !HR.isDirty(draft, null)) { store(s => s.removeItem(DRAFT_KEY)); return; }
+      // 共用の端末なので黙って戻さない。誰の・いつの書きかけかを見せて選んでもらう
+      const who = HR.normReporter(draft.reporter);
+      $('draft-text').textContent = `${stamp(draft.at)} の書きかけがあります${who ? `（報告者：${who}）` : ''}。続きを書きますか？`;
+      $('draft-card').hidden = false;
+      $('btn-draft-use').onclick = () => {
+        saved = draft.id ? (rows.find(r => r.id === draft.id) || null) : null;
+        if (!saved) newId = (!draft.id && draft.newId) || makeId();
+        fill(draft);
+        $('draft-card').hidden = true;
+        setStatus('書きかけを戻しました（まだ保存していません）');
+      };
+      $('btn-draft-drop').onclick = () => {
+        if (!confirm('書きかけの内容を捨てますか？')) return;
+        store(s => s.removeItem(DRAFT_KEY));
+        $('draft-card').hidden = true;
+      };
+    });
+  </script>
+</body>
+</html>

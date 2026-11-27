@@ -140,6 +140,25 @@
       border-color: #dd6a12;
       color: #c2570c;
     }
+    .wide-link {
+      width: 100%;
+      max-width: 640px;
+      margin-top: 16px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      padding: 16px;
+      background: white;
+      border: 2px solid #dd6a12;
+      border-radius: 14px;
+      color: #1a2a3a;
+      text-decoration: none;
+      font-size: 16px;
+      font-weight: bold;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+    }
+    .wide-link:hover, .wide-link:active { background: #dd6a12; color: white; }
     footer {
       margin-top: 28px;
       font-size: 12px;
@@ -191,6 +210,8 @@
       <span class="badge" id="badge6"></span>
     </a>
   </div>
+
+  <a href="houkoku.html" class="wide-link" id="btn-houkoku">📝 ホーム報告書を書く</a>
 
   <div class="sub-links">
     <a href="history.html" class="sub-link">📋 過去記録</a>
