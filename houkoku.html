@@ -118,7 +118,7 @@
 </head>
 <body>
   <div class="page-header">
-    <a href="index.html" aria-label="ホームを選ぶ画面へ戻る">‹</a>
+    <a href="index.html" id="back-link" aria-label="ホームを選ぶ画面へ戻る">‹</a>
     <h1>📝 ホーム報告書</h1>
   </div>
 
@@ -214,6 +214,11 @@
     const COLS = 'id,gh_num,report_date,reporter,body,updated_at';
     const $ = id => document.getElementById(id);
     const el = { date: $('in-date'), gh: $('in-gh'), reporter: $('in-reporter'), body: $('in-body') };
+
+    // 管理画面のサイトの「ホームを選ぶ画面」から来た時は、そこへ戻す（入口が 2 つあるため）
+    if (new URLSearchParams(location.search).get('back') === 'cs') {
+      $('back-link').href = 'https://care-stack-absence.onrender.com/report/';
+    }
 
     const { createClient } = supabase;
     const db = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);

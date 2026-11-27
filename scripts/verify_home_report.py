@@ -376,6 +376,11 @@ def run_engine(pw, engine):
     check("「‹」でホームを選ぶ画面へ戻る", page.url.endswith("/index.html"))
     ctx.close()
 
+    ctx, page, errors = open_page(browser, Mock(), path="/houkoku.html?back=cs")
+    check("管理画面のサイトから来た時（?back=cs）は「‹」がそちらのホームを選ぶ画面へ戻る",
+          page.get_attribute("#back-link", "href") == "https://care-stack-absence.onrender.com/report/" and page.is_visible("#in-body"))
+    ctx.close()
+
     mock = Mock()
     ctx, page, errors = open_page(browser, mock, logged_in=False)
     check("ログインしていない時はログインの画面が覆い、一覧は読みに行かない", page.locator("#auth-overlay").count() == 1 and not mock.calls)
