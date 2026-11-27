@@ -985,6 +985,9 @@
           item.el.querySelectorAll('textarea').forEach(autoExpand);
         }
       });
+      // 短期入所の見出しは、短期入所の欄が 1 つも出ていない時は隠す（見出しだけが残らないように）
+      const shortSection = document.querySelector('.short-stay-section');
+      if (shortSection) shortSection.hidden = !shortSection.querySelector('.short-stay-entry:not([hidden])');
       document.querySelectorAll('.resident-tab-btn').forEach(btn => {
         btn.classList.toggle('is-active', !residentTabsShowAll && btn.dataset.tabKey === key);
       });
