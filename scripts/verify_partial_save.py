@@ -128,6 +128,13 @@ def new_page(browser, **kwargs):
     return page
 
 
+def show_all_residents(page):
+    """2026-11-27: 利用者タブ導入で既定は1人ずつ表示。複数利用者を同時に触る台本向けに全員表示へ切り替える。"""
+    toggle = page.locator("#resident-tabs-toggle")
+    if toggle.count() > 0 and toggle.is_visible():
+        toggle.click()
+
+
 def case1_two_tabs_different_residents_both_survive(pw):
     print("\n--- ケース①: 2タブで別々の利用者を編集→両方残る ---")
     browser = pw.chromium.launch()
@@ -142,6 +149,7 @@ def case1_two_tabs_different_residents_both_survive(pw):
     page_b.goto(f"{BASE}/report.html?gh={GH}&date={DATE}", wait_until="domcontentloaded")
     page_a.wait_for_selector(".resident-entry textarea", timeout=5000)
     page_b.wait_for_selector(".resident-entry textarea", timeout=5000)
+    show_all_residents(page_b)  # page_bは2人目(佐藤花子)を触るので全員表示にする
 
     ta_a = page_a.locator(".resident-entry textarea").first  # 山田太郎
     ta_b = page_b.locator(".resident-entry textarea").nth(1)  # 佐藤花子
@@ -354,7 +362,8 @@ def case7_pending_conflict_excluded_from_next_save(pw):
     conflict_banner_visible = page.locator(".resident-entry .conflict-banner").first.is_visible()
     record("山田で競合バナーが表示される", conflict_banner_visible)
 
-    # 2. バナーを放置したまま佐藤の textarea に入力する
+    # 2. バナーを放置したまま佐藤の textarea に入力する（佐藤はタブで隠れているので全員表示にする）
+    show_all_residents(page)
     ta_sato = page.locator(".resident-entry textarea").nth(1)
     ta_sato.fill("佐藤さんの新しい本文")
     ta_sato.dispatch_event("input")

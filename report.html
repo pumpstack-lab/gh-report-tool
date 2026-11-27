@@ -21,6 +21,7 @@
   <script src="scripts/bowel_copy.js?v=1"></script>
   <script src="scripts/patrol_copy.js?v=1"></script>
   <script src="scripts/item_notice.js?v=1"></script>
+  <script src="scripts/resident_tabs.js?v=1"></script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
@@ -138,6 +139,30 @@
     .btn-conflict-danger { background:#fff; color:#c0392b; border:1.5px solid #e6a8a2; }
     .conflict-note { margin:0 0 8px; color:#c0392b; font-size:12px; line-height:1.5; }
     @media (max-width: 420px) { .conflict-actions button { flex:1 1 100%; } }
+
+    /* 利用者タブ（2026-11-27）。50音順に並んだ名前を押すと、その人の欄だけが開く。 */
+    .resident-tabs-bar {
+      display: flex; flex-wrap: wrap; gap: 8px;
+      margin-bottom: 16px;
+    }
+    .resident-tab-btn {
+      min-height: 44px; padding: 8px 14px; font-size: 16px; font-family: inherit;
+      border: 1.5px solid #e6d8ca; border-radius: 10px; background: #f8f9fa;
+      color: #3a4a5a; cursor: pointer; white-space: nowrap;
+    }
+    .resident-tab-btn.is-active {
+      border-color: #dd6a12; background: #fff4ea; color: #c2570c; font-weight: bold;
+    }
+    .resident-tab-filled::after { content: ' \2713'; color: #2e7d32; font-weight: bold; }
+    .resident-tabs-toggle {
+      display: block; margin: 0 0 14px; padding: 8px 12px; min-height: 44px;
+      font-size: 14px; font-family: inherit; border: 1.5px solid #e6d8ca; border-radius: 10px;
+      background: #fff; color: #7a8a9a; cursor: pointer;
+    }
+    .resident-tabs-toggle.is-active { border-color: #dd6a12; color: #c2570c; }
+    /* タブ表示中、選ばれていない人の欄を隠す（DOMからは消さない＝保存処理を壊さないため） */
+    #residents-container.tabs-mode .resident-entry[hidden],
+    #residents-container.tabs-mode .short-stay-entry[hidden] { display: none; }
 
     .resident-entry {
       margin-bottom: 20px;
@@ -639,6 +664,8 @@
 
   <div class="section">
     <div class="section-label">【特記事項】</div>
+    <button type="button" id="resident-tabs-toggle" class="resident-tabs-toggle">全員を表示</button>
+    <div id="resident-tabs-bar" class="resident-tabs-bar"></div>
     <div id="residents-container"></div>
   </div>
 
@@ -908,8 +935,122 @@
 
     // ─── Residents ────────────────────────────────────────
     function autoExpand(el) {
+      // 隠れているタブの中（display:none）は scrollHeight が測れない（常に0になる）。
+      // そのタブを開いた時にやり直せば直るので、ここでは測れない時は何もしない（ネイト指摘）。
+      if (el.offsetParent === null) return;
       el.style.height = 'auto';
       el.style.height = el.scrollHeight + 'px';
+    }
+
+    // ─── Resident Tabs（1人ずつ表示・2026-11-27） ──────────
+    let kanaByResidentId = {};    // { residentId: kana }
+    let residentTabsShowAll = false; // true=全員表示（従来の縦スクロール）
+    let activeResidentTabKey = null; // 開いているタブの dataset.name / dataset.shortStayKey
+
+    // 利用者タブの対象（.resident-entry と .short-stay-entry）を、キー・表示名・DOM要素つきで返す。
+    function collectResidentTabTargets() {
+      const items = [];
+      document.querySelectorAll('#residents-container .resident-entry').forEach((entry, idx) => {
+        items.push({
+          key: entry.dataset.name,
+          label: entry.dataset.name,
+          el: entry,
+          kana: kanaByResidentId[entry.dataset.residentId] || null,
+          sortOrder: idx,
+          trailing: false,
+        });
+      });
+      document.querySelectorAll('#residents-container .short-stay-entry').forEach((entry, idx) => {
+        items.push({
+          key: entry.dataset.shortStayKey,
+          label: `短期入所${entry.dataset.shortStayKey === '__short_stay_1__' ? '①' : '②'}`,
+          el: entry,
+          kana: null,
+          sortOrder: idx,
+          trailing: true, // 短期入所①②は常に一番後ろ（要件5）
+        });
+      });
+      return items;
+    }
+
+    // 指定キーの欄だけを表示し、他は隠す（DOMからは消さない＝保存処理はそのまま全員分を読む）。
+    function showResidentTab(key) {
+      activeResidentTabKey = key;
+      const items = collectResidentTabTargets();
+      items.forEach(item => {
+        const show = residentTabsShowAll || item.key === key;
+        item.el.hidden = !show;
+        if (show) {
+          // 開いた直後に高さを測り直す（隠れていた間はautoExpandが測れずスキップされていたため）。
+          item.el.querySelectorAll('textarea').forEach(autoExpand);
+        }
+      });
+      document.querySelectorAll('.resident-tab-btn').forEach(btn => {
+        btn.classList.toggle('is-active', !residentTabsShowAll && btn.dataset.tabKey === key);
+      });
+    }
+
+    // タブ1個分の「入力済み」印を更新する。
+    function refreshResidentTabFilledMark(key) {
+      const btn = document.querySelector(`.resident-tab-btn[data-tab-key="${CSS.escape(key)}"]`);
+      if (!btn) return;
+      const items = collectResidentTabTargets();
+      const item = items.find(i => i.key === key);
+      if (!item) return;
+      const ta = item.el.querySelector('textarea');
+      btn.classList.toggle('resident-tab-filled', ResidentTabs.hasText(ta ? ta.value : ''));
+    }
+
+    function refreshAllResidentTabFilledMarks() {
+      collectResidentTabTargets().forEach(item => refreshResidentTabFilledMark(item.key));
+    }
+
+    // タブバー・全員表示ボタンを作る／並べ直す。日付切替では呼ばない（利用者構成はinit()でのみ決まる）。
+    function renderResidentTabsBar() {
+      const bar = document.getElementById('resident-tabs-bar');
+      const toggle = document.getElementById('resident-tabs-toggle');
+      if (!bar || !toggle) return;
+      const items = ResidentTabs.sortByKana(collectResidentTabTargets());
+      bar.innerHTML = '';
+      items.forEach(item => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'resident-tab-btn';
+        btn.dataset.tabKey = item.key;
+        btn.textContent = item.label;
+        btn.addEventListener('click', () => {
+          residentTabsShowAll = false;
+          toggle.textContent = '全員を表示';
+          toggle.classList.remove('is-active');
+          showResidentTab(item.key);
+        });
+        bar.appendChild(btn);
+      });
+      refreshAllResidentTabFilledMarks();
+      // 保っていた人がまだ居ればその人のまま、居なければ先頭（要件3）
+      const keepKey = items.some(i => i.key === activeResidentTabKey) ? activeResidentTabKey : (items[0] && items[0].key);
+      document.getElementById('residents-container').classList.add('tabs-mode');
+      showResidentTab(keepKey);
+    }
+
+    function toggleResidentTabsAll() {
+      residentTabsShowAll = !residentTabsShowAll;
+      const toggle = document.getElementById('resident-tabs-toggle');
+      toggle.textContent = residentTabsShowAll ? '1人ずつ表示に戻す' : '全員を表示';
+      toggle.classList.toggle('is-active', residentTabsShowAll);
+      showResidentTab(activeResidentTabKey);
+    }
+    document.getElementById('resident-tabs-toggle').addEventListener('click', () => toggleResidentTabsAll());
+
+    // 指定キーの欄を開いた上でスクロール/フォーカスする（隠れたタブの中へ案内しても見えないため）。
+    function openResidentTabAndFocus(key, focusEl) {
+      if (!key) return;
+      if (!residentTabsShowAll) {
+        const btn = document.querySelector(`.resident-tab-btn[data-tab-key="${CSS.escape(key)}"]`);
+        if (btn) btn.click();
+        else showResidentTab(key);
+      }
+      if (focusEl) focusEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
     }
 
     // ─── Diaper Usage ─────────────────────────────────────
@@ -2827,6 +2968,8 @@
       renderBanners();
       document.getElementById('draft-restore-yes').addEventListener('click', () => {
         names.forEach(name => {
+          // 隠れたタブの中だと高さが測れない（autoExpand）ので、先にそのタブを開く。
+          openResidentTabAndFocus(tabKeyForFieldKey(name), null);
           const el2 = fieldForKey(name);
           if (!el2) return;
           el2.value = restorable[name];
@@ -2835,6 +2978,7 @@
         bannerState.draftRestore = '';
         renderBanners();
         scheduleAutoSave();
+        refreshAllResidentTabFilledMarks();
       });
       document.getElementById('draft-restore-no').addEventListener('click', () => {
         try { localStorage.removeItem(ReportDraft.draftKey(ghNum, dateISO)); } catch (e) { /* 無視 */ }
@@ -2852,6 +2996,14 @@
         .find(e => e.dataset.shortStayKey === name || `${e.dataset.shortStayKey}name` === name);
       if (!ss) return null;
       return name.endsWith('name') ? ss.querySelector('input') : ss.querySelector('textarea');
+    }
+
+    // residentsキー（fieldForKeyと同じ引数）から、対応する利用者タブのキーを返す。
+    // 短期入所の氏名キー（末尾name）も、同じ枠の本文タブキーに揃える。
+    function tabKeyForFieldKey(name) {
+      if (!name) return null;
+      const m = /^(__short_stay_\d+__)name$/.exec(name);
+      return m ? m[1] : name;
     }
 
     // 短期入所枠は内部キーなので、画面に出す名前を整える。
@@ -2875,7 +3027,7 @@
       el.onclick = n.level === 'conflict' ? () => {
         const first = Object.keys((pendingConflicts && pendingConflicts.residents) || {})[0];
         const target = fieldForKey(first);
-        if (target) target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        openResidentTabAndFocus(tabKeyForFieldKey(first), target);
       } : null;
       bannerState.unsaved = n.show ? n.message : '';
       renderBanners();
@@ -3183,6 +3335,9 @@
       document.querySelectorAll('.resident-entry .conflict-banner, .short-stay-entry .conflict-banner')
         .forEach(el => el.remove());
       const residentConflicts = pendingConflicts.residents || {};
+      // 競合した欄がタブで隠れていると気づけない。最初の1件のタブを自動で開く。
+      const firstConflictKey = Object.keys(residentConflicts)[0];
+      if (firstConflictKey) openResidentTabAndFocus(tabKeyForFieldKey(firstConflictKey), null);
       Object.entries(residentConflicts).forEach(([name, otherValue]) => {
         let entry = Array.from(document.querySelectorAll('.resident-entry'))
           .find(e => e.dataset.name === name);
@@ -3622,10 +3777,14 @@
       await initStaffAndHolidays();
       updateHolidayIndicator();
 
-      const [{ data: residentsData }, { data: reportData, error: reportError }] = await Promise.all([
+      const [{ data: residentsData }, { data: reportData, error: reportError }, kanaResult] = await Promise.all([
         db.from('residents').select('id, name').eq('gh_num', parseInt(ghNum)).eq('active', true).order('sort_order'),
-        db.from('reports').select('*').eq('gh_num', parseInt(ghNum)).eq('report_date', dateISO).maybeSingle()
+        db.from('reports').select('*').eq('gh_num', parseInt(ghNum)).eq('report_date', dateISO).maybeSingle(),
+        // よみがなは読めなくても日報を止めない（表が無い・権限が無い・通信失敗でも今の並びで動く）。
+        db.from('resident_kana').select('resident_id, kana').then(r => r, () => ({ data: null, error: true }))
       ]);
+      kanaByResidentId = {};
+      (kanaResult && kanaResult.data || []).forEach(row => { kanaByResidentId[row.resident_id] = row.kana; });
 
       if (reportError) {
         console.error('reports load failed:', reportError.message);
@@ -3655,6 +3814,8 @@
             <p>利用者が登録されていません</p>
             <p style="font-size:13px;color:#aaa;margin-top:8px">管理者ページから利用者を登録してください</p>
           </div>`;
+        document.getElementById('resident-tabs-bar').innerHTML = '';
+        document.getElementById('resident-tabs-toggle').style.display = 'none';
       } else {
         residentRows.forEach(r => {
           const div = document.createElement('div');
@@ -3680,7 +3841,9 @@
           ta.addEventListener('input', function() { autoExpand(this); scheduleAutoSave(); });
         });
         document.querySelectorAll('.resident-entry').forEach(entry => {
-          bindActiveKeyTracking(entry.querySelector('textarea'), `residents.${entry.dataset.name}`);
+          const mainTa = entry.querySelector('textarea');
+          bindActiveKeyTracking(mainTa, `residents.${entry.dataset.name}`);
+          mainTa.addEventListener('input', () => refreshResidentTabFilledMark(entry.dataset.name));
         });
       }
 
@@ -3703,7 +3866,8 @@
           renderTemperatureRow(entry, entry.dataset.shortStayKey, () => entry.querySelector('.short-stay-name-input').value.trim() || `短期入所${['①','②'][n-1]}`);
           renderBathRow(entry, entry.dataset.shortStayKey, () => entry.querySelector('.short-stay-name-input').value.trim() || `短期入所${['①','②'][n-1]}`);
           entry.querySelector('input').addEventListener('input', scheduleAutoSave);
-          entry.querySelector('textarea').addEventListener('input', function() { autoExpand(this); scheduleAutoSave(); });
+          const shortTa = entry.querySelector('textarea');
+          shortTa.addEventListener('input', function() { autoExpand(this); scheduleAutoSave(); refreshResidentTabFilledMark(entry.dataset.shortStayKey); });
           section.appendChild(entry);
         });
         container.appendChild(section);
@@ -3753,6 +3917,7 @@
       rerenderPatrolBlocks();
       refreshAllTemperatureRows();
       refreshAllBathRows();
+      if (residentRows.length > 0) renderResidentTabsBar(); // 利用者の構成が決まった直後に1回だけ作る（日付切替では作り直さない）
       reportLoadedFor = dateISO;
       offerDraftRestore(dateISO, (reportData && reportData.residents) || {});
       setFormInputsDisabled(false);

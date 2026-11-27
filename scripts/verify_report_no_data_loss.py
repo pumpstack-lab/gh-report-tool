@@ -109,6 +109,10 @@ def open_page(browser, rpc_calls, pending_routes, auto_responses):
     setup_routes(page, rpc_calls, pending_routes, auto_responses)
     page.goto(f"{BASE}/report.html?gh={GH}&date={DATE}", wait_until="domcontentloaded")
     page.wait_for_selector(".resident-entry textarea", timeout=8000)
+    # 2026-11-27: 利用者タブ導入で既定は1人ずつ表示。短期入所枠も触る台本なので全員表示にする。
+    toggle = page.locator("#resident-tabs-toggle")
+    if toggle.count() > 0 and toggle.is_visible():
+        toggle.click()
     return page
 
 

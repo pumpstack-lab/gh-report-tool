@@ -195,6 +195,11 @@ def new_page(browser):
 def goto_loaded(page, date=DATE, **kwargs):
     page.goto(f"{BASE}/report.html?gh={GH}&date={date}", wait_until="domcontentloaded")
     page.wait_for_function(f"() => tempLoadedForDate === '{date}'", timeout=5000)
+    # 2026-11-27: 利用者タブ導入で既定は1人ずつ表示。この台本は複数の利用者/短期入所枠を
+    # 同時に見る前提なので、全員表示へ切り替える。
+    toggle = page.locator("#resident-tabs-toggle")
+    if toggle.count() > 0 and toggle.is_visible():
+        toggle.click()
 
 
 def first_resident_row(page):

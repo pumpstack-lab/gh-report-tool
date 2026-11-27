@@ -56,6 +56,10 @@ def open_page(browser, width, drop_script=False):
     page.wait_for_function(
         "() => !document.querySelector('.personal-items-block .btn-add-personal-item').disabled",
         timeout=8000)
+    # 2026-11-27: 利用者タブ導入で既定は1人ずつ表示になった。この台本は3人分を同時に見る前提。
+    toggle = page.locator("#resident-tabs-toggle")
+    if toggle.count() > 0 and toggle.is_visible():
+        toggle.click()
     return page, errors
 
 

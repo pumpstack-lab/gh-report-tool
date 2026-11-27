@@ -152,6 +152,11 @@ def open_page(browser, gh=GH, width=390, **kw):
     rows, calls, gets = setup(page, **kw)
     page.goto(f"{BASE}/report.html?gh={gh}&date={DATE}", wait_until="domcontentloaded")
     page.wait_for_function(f"() => reportLoadedFor === '{DATE}'", timeout=8000)
+    # 2026-11-27: 利用者タブ導入で既定は1人ずつ表示になった。この台本は全員の.bath-rowを
+    # 同時に見る前提なので、全員表示へ切り替える（タブが無いGHでは要素が無いだけで無害）。
+    toggle = page.locator("#resident-tabs-toggle")
+    if toggle.count() > 0 and toggle.is_visible():
+        toggle.click()
     return page, rows, calls, gets, errors
 
 
