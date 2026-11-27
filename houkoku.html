@@ -266,7 +266,7 @@
     // 書きかけは端末の中に持つ（保存できたら消す）。閉じても、通信が切れても本文を失わないため。
     function saveDraft() {
       if (HR.isDirty(current(), saved)) {
-        store(s => s.setItem(DRAFT_KEY, JSON.stringify({ id: saved ? saved.id : null, newId, at: Date.now(), ...current() })));
+        store(s => s.setItem(DRAFT_KEY, JSON.stringify({ id: saved ? saved.id : null, base: saved ? saved.updated_at : null, newId, at: Date.now(), ...current() })));
       } else {
         store(s => s.removeItem(DRAFT_KEY));
       }
@@ -449,12 +449,25 @@
       const who = HR.normReporter(draft.reporter);
       $('draft-text').textContent = `${stamp(draft.at)} の書きかけがあります${who ? `（報告者：${who}）` : ''}。続きを書きますか？`;
       $('draft-card').hidden = false;
-      $('btn-draft-use').onclick = () => {
-        saved = draft.id ? (rows.find(r => r.id === draft.id) || null) : null;
+      $('btn-draft-use').onclick = async () => {
+        let base = null;
+        if (draft.id) {
+          // 直していた元の報告書は、一覧（先頭の 30 件）に無くても番号で取りに行く
+          $('btn-draft-use').disabled = true;
+          let res;
+          try { res = await db.from('home_reports').select(COLS).eq('id', draft.id).is('deleted_at', null); } catch (e) { res = { error: e }; }
+          $('btn-draft-use').disabled = false;
+          if (res.error) { setStatus('書きかけの元の報告書を読めませんでした。電波の良い所でもう一度押してください。', true); return; }
+          base = res.data[0] || null;
+        }
+        // 更新時刻は「書きかけを作った時に読んでいた時刻」を使う＝その後にほかの端末で直されていたら保存の時に気づける
+        saved = base ? { ...base, updated_at: draft.base || base.updated_at } : null;
         if (!saved) newId = (!draft.id && draft.newId) || makeId();
         fill(draft);
         $('draft-card').hidden = true;
-        setStatus('書きかけを戻しました（まだ保存していません）');
+        setStatus(draft.id && !base
+          ? '書きかけを戻しました。元の報告書は消されているので、新しい報告書として保存されます'
+          : '書きかけを戻しました（まだ保存していません）');
       };
       $('btn-draft-drop').onclick = () => {
         if (!confirm('書きかけの内容を捨てますか？')) return;

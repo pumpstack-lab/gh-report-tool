@@ -294,6 +294,37 @@ def run_engine(pw, engine):
         page.wait_for_timeout(300)
         check("3 日を過ぎた書きかけは出さずに消す", not page.is_visible("#draft-card") and page.evaluate("localStorage.getItem('houkoku_draft_v1')") is None)
 
+        # 9b. 保存済みを直している途中の書きかけ（元の報告書が一覧の絞り込みの外でも同じ行を直す）
+        tgt = next(r for r in mock.rows if r["id"].endswith("0001"))
+        page.locator('.item[data-id$="0001"]').click()
+        page.fill("#in-body", "直している途中の見本")
+        page.evaluate("document.getElementById('filter-gh').value = '5'")
+        n_rows = len(mock.rows)
+        page.reload(wait_until="networkidle")
+        page.wait_for_timeout(300)
+        page.select_option("#filter-gh", "5")
+        page.wait_for_timeout(300)
+        page.click("#btn-draft-use")
+        page.wait_for_timeout(400)
+        check("直し途中の書きかけ → 元の報告書を番号で取り直して開く", page.is_visible("#btn-delete") and page.input_value("#in-body") == "直している途中の見本")
+        page.click("#btn-save")
+        page.wait_for_timeout(400)
+        check("保存しても 2 枚にならず、元の行が直る", len(mock.rows) == n_rows and tgt["body"] == "直している途中の見本", f"{len(mock.rows)}/{n_rows}")
+        page.select_option("#filter-gh", "")
+        page.wait_for_timeout(300)
+        page.fill("#in-body", "書きかけの後でほかの端末が直した時の見本")
+        tgt["updated_at"] = "2026-11-27T12:12:12.000000+00:00"
+        page.reload(wait_until="networkidle")
+        page.wait_for_timeout(300)
+        page.click("#btn-draft-use")
+        page.wait_for_timeout(400)
+        page.click("#btn-save")
+        page.wait_for_timeout(400)
+        check("書きかけの後にほかの端末で直されていたら、戻して保存しても上書きしない",
+              "ほかの端末" in status(page) and tgt["body"] == "直している途中の見本", status(page)[:24])
+        page.once("dialog", lambda d: d.accept())
+        page.click("#btn-new")
+
         # 10. 印刷：保存してから刷る・紙の中身
         page.evaluate("(() => { window.__printed = 0; window.print = () => { window.__printed++; }; })()")
         fill_form(page, gh="6", reporter="見本 四郎", body="印刷の見本\n<i>斜めにならない</i>", date="2026-05-20")
