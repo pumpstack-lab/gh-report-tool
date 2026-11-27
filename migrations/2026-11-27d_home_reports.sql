@@ -22,7 +22,7 @@ create index if not exists home_reports_list_idx on home_reports (report_date de
 create or replace function home_reports_touch() returns trigger
 language plpgsql set search_path = public as $$
 begin
-  new.updated_at := now();
+  new.updated_at := clock_timestamp();   -- now() は処理の始まりの時刻で、同じ処理の中では進まないため
   new.created_at := old.created_at;
   new.created_by := old.created_by;
   return new;
