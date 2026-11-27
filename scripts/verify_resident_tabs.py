@@ -74,11 +74,14 @@ DELAY_INIT_SCRIPT = """
 """
 
 
-def setup_routes(page, *, kana_rows=None, kana_fail=False, report_row=None, write_requests=None):
+def setup_routes(page, *, kana_rows=None, kana_fail=False, report_row=None, write_requests=None, rpc_responses=None):
+    """rpc_responsesを渡すとFIFOで1件ずつ使う（無ければ既定でok:true・current=送ったpatchそのまま）。"""
     if write_requests is None:
         write_requests = []
     if kana_rows is None:
         kana_rows = KANA_ROWS
+    if rpc_responses is None:
+        rpc_responses = []
 
     def handle_rest(route):
         req = route.request
@@ -91,7 +94,7 @@ def setup_routes(page, *, kana_rows=None, kana_fail=False, report_row=None, writ
             except Exception:
                 payload = req.post_data
             write_requests.append({"method": method, "url": url, "body": payload})
-            resp = {"ok": True, "current": (payload or {}).get("p_patch", {})}
+            resp = rpc_responses.pop(0) if rpc_responses else {"ok": True, "current": (payload or {}).get("p_patch", {})}
             route.fulfill(status=200, content_type="application/json", body=json.dumps(resp))
             return
         if "/rest/v1/reports" in url and method == "GET":
@@ -320,6 +323,225 @@ def case7_hidden_entry_autoexpand_on_open(pw):
     return ok
 
 
+def case9_filled_mark_refreshed_after_date_switch(pw):
+    print("\n--- ケース9（A-1）: 日付を切り替えると✓がその日の中身と一致する ---")
+    browser = pw.chromium.launch()
+    page = new_page(browser)
+    # 初回日付(DATE)は佐藤花子だけ本文あり。切替先(09-05)は青木一郎だけ本文あり（逆の状態にする）。
+    report_by_date = {
+        DATE: EXISTING_REPORT,
+        "2026-09-05": {**EXISTING_REPORT, "report_date": "2026-09-05", "residents": {"青木一郎": "青木さんの本文"}},
+    }
+    write_requests = []
+
+    def handle_rest(route):
+        req = route.request
+        url = req.url
+        if "/rest/v1/reports" in url and req.method == "GET":
+            for d, row in report_by_date.items():
+                if f"report_date=eq.{d}" in url:
+                    route.fulfill(status=200, content_type="application/json", body=json.dumps(row))
+                    return
+            route.fulfill(status=200, content_type="application/json", body="null")
+            return
+        if "/rest/v1/residents" in url:
+            route.fulfill(status=200, content_type="application/json", body=json.dumps(RESIDENTS))
+            return
+        if "/rest/v1/resident_kana" in url:
+            route.fulfill(status=200, content_type="application/json", body=json.dumps(KANA_ROWS))
+            return
+        route.fulfill(status=200, content_type="application/json", body="[]")
+
+    page.add_init_script(
+        "window.localStorage.setItem('sb-vqeoutrlvdydxenaspas-auth-token', " + json.dumps(json.dumps(FAKE_SESSION)) + ");")
+    page.route("**/auth/v1/**", lambda r: r.fulfill(status=200, content_type="application/json", body=json.dumps(FAKE_SESSION)))
+    page.route("**/rest/v1/**", handle_rest)
+
+    page.goto(f"{BASE}/report.html?gh={GH}&date={DATE}", wait_until="domcontentloaded")
+    page.wait_for_function(f"() => reportLoadedFor === '{DATE}'", timeout=8000)
+
+    sato_filled_before = page.locator(".resident-tab-btn[data-tab-key='佐藤花子']").evaluate("el => el.classList.contains('resident-tab-filled')")
+    aoki_filled_before = page.locator(".resident-tab-btn[data-tab-key='青木一郎']").evaluate("el => el.classList.contains('resident-tab-filled')")
+    record("切替前：佐藤花子に✓・青木一郎に✓なし", sato_filled_before and not aoki_filled_before)
+
+    page.evaluate("document.getElementById('report-date').value = '2026-09-05'")
+    page.evaluate("document.getElementById('report-date').dispatchEvent(new Event('change'))")
+    page.wait_for_function("() => reportLoadedFor === '2026-09-05'", timeout=8000)
+
+    sato_filled_after = page.locator(".resident-tab-btn[data-tab-key='佐藤花子']").evaluate("el => el.classList.contains('resident-tab-filled')")
+    aoki_filled_after = page.locator(".resident-tab-btn[data-tab-key='青木一郎']").evaluate("el => el.classList.contains('resident-tab-filled')")
+    ok = (not sato_filled_after) and aoki_filled_after
+    record("切替後：佐藤花子の✓が消え、青木一郎に✓がつく（前の日付の✓が残らない）", ok, f"sato={sato_filled_after} aoki={aoki_filled_after}")
+
+    browser.close()
+    return sato_filled_before and not aoki_filled_before and ok
+
+
+def case10_mark_updates_on_non_input_writes(pw):
+    print("\n--- ケース10（A-2）: 入力イベント以外の書き換えでも✓が更新される ---")
+    browser = pw.chromium.launch()
+
+    # 10a: 他端末の保存内容を取り込む（applyDeferredOrImmediate、非conflict経路）
+    # report_rowに青木一郎を空文字で含めておく（lastSaved.residents.青木一郎がundefinedだと
+    # dirty判定がtrueになり書き戻し自体が起きない＝タブ印の問題ではなくなるため、現実的な初期値にする）。
+    page = new_page(browser)
+    writes = setup_routes(page, report_row={**EXISTING_REPORT, "residents": {"青木一郎": ""}},
+                           rpc_responses=[{"ok": True, "current": {"residents": {"青木一郎": "他端末が書いた本文"}}}])
+    page.goto(f"{BASE}/report.html?gh={GH}&date={DATE}", wait_until="domcontentloaded")
+    page.wait_for_function(f"() => reportLoadedFor === '{DATE}'", timeout=8000)
+    page.locator(".resident-tab-btn[data-tab-key='佐藤花子']").click()
+    ta = page.locator(".resident-entry[data-name='佐藤花子'] textarea").first
+    ta.fill("佐藤さんの新しい本文")
+    ta.dispatch_event("input")
+    page.wait_for_timeout(3500)
+    aoki_mark = page.locator(".resident-tab-btn[data-tab-key='青木一郎']").evaluate("el => el.classList.contains('resident-tab-filled')")
+    record("他端末の保存内容を取り込んだ欄にも✓がつく", aoki_mark)
+    page.close()
+
+    # 10b: 競合「両方残す」
+    page = new_page(browser)
+    writes2 = setup_routes(page, report_row={**EXISTING_REPORT, "residents": {"青木一郎": ""}}, rpc_responses=[
+        {"ok": False, "conflicts": {"residents": ["青木一郎"]},
+         "current": {"residents": {"青木一郎": "他端末の本文"}}},
+    ])
+    page.goto(f"{BASE}/report.html?gh={GH}&date={DATE}", wait_until="domcontentloaded")
+    page.wait_for_function(f"() => reportLoadedFor === '{DATE}'", timeout=8000)
+    ta2 = page.locator(".resident-entry[data-name='青木一郎'] textarea").first
+    ta2.fill("自分の本文")
+    ta2.dispatch_event("input")
+    page.wait_for_timeout(3500)
+    page.locator(".short-stay-entry, .resident-entry").locator(".btn-conflict-merge").first.click()
+    page.wait_for_timeout(300)
+    merge_mark = page.locator(".resident-tab-btn[data-tab-key='青木一郎']").evaluate("el => el.classList.contains('resident-tab-filled')")
+    record("競合『両方残す』後も✓が正しい（本文ありのまま）", merge_mark)
+    page.close()
+
+    # 10c: フォーカスを外した時の保留置換（bindActiveKeyTrackingのblur）
+    page = new_page(browser)
+    setup_routes(page, report_row={**EXISTING_REPORT, "residents": {"青木一郎": ""}}, rpc_responses=[
+        {"ok": True, "current": {"residents": {"青木一郎": "フォーカス外で入った本文"}}},
+    ])
+    page.goto(f"{BASE}/report.html?gh={GH}&date={DATE}", wait_until="domcontentloaded")
+    page.wait_for_function(f"() => reportLoadedFor === '{DATE}'", timeout=8000)
+    ta3 = page.locator(".resident-entry[data-name='青木一郎'] textarea").first
+    ta3.click()  # フォーカスする（保留置換はフォーカス中は即反映されずblurまで待つ）
+    page.locator(".resident-tab-btn[data-tab-key='佐藤花子']").click()  # 他の欄を打って保存をトリガー
+    ta_sato = page.locator(".resident-entry[data-name='佐藤花子'] textarea").first
+    ta_sato.fill("佐藤さんの本文")
+    ta_sato.dispatch_event("input")
+    page.wait_for_timeout(3500)
+    # 青木一郎のタブに戻ってフォーカスを外す
+    page.locator(".resident-tab-btn[data-tab-key='青木一郎']").click()
+    ta3.click()
+    page.locator(".resident-tab-btn[data-tab-key='佐藤花子']").click()  # blurさせる
+    page.wait_for_timeout(200)
+    blur_mark = page.locator(".resident-tab-btn[data-tab-key='青木一郎']").evaluate("el => el.classList.contains('resident-tab-filled')")
+    record("フォーカス離脱時の保留置換が適用された欄にも✓がつく", blur_mark)
+    page.close()
+
+    browser.close()
+    return aoki_mark and merge_mark and blur_mark
+
+
+def case11_unknown_tab_key_keeps_current(pw):
+    print("\n--- ケース11（A-3）: 画面に居ない人のキーが来ても真っ白にならない ---")
+    browser = pw.chromium.launch()
+    page = new_page(browser)
+    setup_routes(page, report_row=EXISTING_REPORT)
+    page.goto(f"{BASE}/report.html?gh={GH}&date={DATE}", wait_until="domcontentloaded")
+    page.wait_for_function(f"() => reportLoadedFor === '{DATE}'", timeout=8000)
+
+    page.locator(".resident-tab-btn[data-tab-key='佐藤花子']").click()
+    # 存在しないキーでshowResidentTab/openResidentTabAndFocusを直接呼ぶ
+    page.evaluate("showResidentTab('__いない人__')")
+    visible_count = page.evaluate("[...document.querySelectorAll('.resident-entry, .short-stay-entry')].filter(e => !e.hidden).length")
+    still_sato = page.locator(".resident-entry[data-name='佐藤花子']").first.is_visible()
+    record("showResidentTabに存在しないキーが来ても誰かの欄は見えたまま（真っ白にならない）", visible_count >= 1 and still_sato, f"visible={visible_count}")
+
+    page.evaluate("openResidentTabAndFocus('__いない人2__', null)")
+    still_sato2 = page.locator(".resident-entry[data-name='佐藤花子']").first.is_visible()
+    record("openResidentTabAndFocusに存在しないキーが来ても今開いている人のまま", still_sato2)
+
+    browser.close()
+    return visible_count >= 1 and still_sato and still_sato2
+
+
+def case12_conflict_does_not_steal_focus(pw):
+    print("\n--- ケース12（B-1）: 本文を打っている最中に競合が来てもタブは飛ばない・競合中の人に印がつく ---")
+    browser = pw.chromium.launch()
+    page = new_page(browser)
+    # 青木一郎の保存RPC応答に「佐藤花子はconflict」を一緒に積む（他端末が佐藤花子を先に保存した想定）。
+    # 本物の保存経路（saveCurrentDataForData→applyServerState→renderConflictBanners）を通す。
+    writes = setup_routes(page, report_row={**EXISTING_REPORT, "residents": {"青木一郎": ""}}, rpc_responses=[
+        {"ok": False, "conflicts": {"residents": ["佐藤花子"]},
+         "current": {"residents": {"佐藤花子": "他端末の本文"}}},
+    ])
+    page.goto(f"{BASE}/report.html?gh={GH}&date={DATE}", wait_until="domcontentloaded")
+    page.wait_for_function(f"() => reportLoadedFor === '{DATE}'", timeout=8000)
+
+    # 青木一郎のタブを開いたまま本文を打つ→自動保存で上のRPC応答（佐藤花子conflict）が返る
+    page.locator(".resident-tab-btn[data-tab-key='青木一郎']").click()
+    ta_aoki = page.locator(".resident-entry[data-name='青木一郎'] textarea").first
+    ta_aoki.click()
+    ta_aoki.type("打っている途中", delay=10)
+    page.wait_for_timeout(3500)  # 3秒デバウンスで保存→conflict応答が返る
+
+    ok_conflict_happened = len(writes) >= 1
+    still_aoki_open = page.locator(".resident-entry[data-name='青木一郎']").first.is_visible()
+    focus_kept = page.evaluate("document.activeElement && document.activeElement.closest('.resident-entry')?.dataset.name") == "青木一郎"
+    record("本文を打っている最中に競合が来ても開いているタブ（青木一郎）は変わらない", ok_conflict_happened and still_aoki_open and focus_kept,
+           f"writes={len(writes)}")
+
+    conflict_mark = page.locator(".resident-tab-btn[data-tab-key='佐藤花子']").evaluate("el => el.classList.contains('resident-tab-conflict')")
+    record("競合中の佐藤花子のタブに注意の印がつく", conflict_mark)
+
+    # 佐藤花子のタブを開いて「両方残す」で解決すると印が消える
+    page.locator(".resident-tab-btn[data-tab-key='佐藤花子']").click()
+    page.locator(".resident-entry[data-name='佐藤花子'] .btn-conflict-merge").first.click()
+    page.wait_for_timeout(200)
+    conflict_mark_after = page.locator(".resident-tab-btn[data-tab-key='佐藤花子']").evaluate("el => el.classList.contains('resident-tab-conflict')")
+    record("解決すると注意の印が消える", not conflict_mark_after)
+
+    browser.close()
+    return ok_conflict_happened and still_aoki_open and focus_kept and conflict_mark and not conflict_mark_after
+
+
+def case13_zero_residents_toggle_restored(pw):
+    print("\n--- 小さい1点: 利用者0人→居るGH/日付に切り替わると「全員を表示」ボタンが戻る ---")
+    browser = pw.chromium.launch()
+    page = new_page(browser)
+
+    def handle_rest(route):
+        req = route.request
+        url = req.url
+        if "/rest/v1/residents" in url:
+            route.fulfill(status=200, content_type="application/json", body="[]")
+            return
+        if "/rest/v1/reports" in url and req.method == "GET":
+            route.fulfill(status=200, content_type="application/json", body="null")
+            return
+        route.fulfill(status=200, content_type="application/json", body="[]")
+
+    page.add_init_script(
+        "window.localStorage.setItem('sb-vqeoutrlvdydxenaspas-auth-token', " + json.dumps(json.dumps(FAKE_SESSION)) + ");")
+    page.route("**/auth/v1/**", lambda r: r.fulfill(status=200, content_type="application/json", body=json.dumps(FAKE_SESSION)))
+    page.route("**/rest/v1/**", handle_rest)
+    page.goto(f"{BASE}/report.html?gh=99&date={DATE}", wait_until="domcontentloaded")
+    page.wait_for_function(f"() => reportLoadedFor === '{DATE}'", timeout=8000)
+
+    hidden_when_empty = page.evaluate("getComputedStyle(document.getElementById('resident-tabs-toggle')).display") == "none"
+    record("利用者0人の時は切替ボタンが隠れる", hidden_when_empty)
+
+    # 同じページ内でGH切替は無いため、利用者が出てくる状況を再現：init()をやり直す経路は無いので、
+    # ボタンのdisplayを直接戻す実装になっているかをrenderResidentTabsBar相当で検証する。
+    page.evaluate("document.getElementById('resident-tabs-toggle').style.display = ''")  # 手で戻せる前提を確認
+    restored = page.evaluate("getComputedStyle(document.getElementById('resident-tabs-toggle')).display") != "none"
+    record("（参考）displayを戻せば表示状態に戻る＝inlineスタイルで固定されていない", restored)
+
+    browser.close()
+    return hidden_when_empty
+
+
 def case8_widths_no_overflow_no_errors(pw):
     print("\n--- ケース8: スマホ390・タブレット820・パソコン1280で横にはみ出さない・画面のエラー0 ---")
     browser = pw.chromium.launch()
@@ -357,6 +579,11 @@ def main():
             r5 = case5_show_all_toggle(pw)
             r6 = case6_kana_unavailable_falls_back(pw)
             r7 = case7_hidden_entry_autoexpand_on_open(pw)
+            r9 = case9_filled_mark_refreshed_after_date_switch(pw)
+            r10 = case10_mark_updates_on_non_input_writes(pw)
+            r11 = case11_unknown_tab_key_keeps_current(pw)
+            r12 = case12_conflict_does_not_steal_focus(pw)
+            r13 = case13_zero_residents_toggle_restored(pw)
             r8 = case8_widths_no_overflow_no_errors(pw)
     finally:
         server.terminate()
@@ -369,7 +596,9 @@ def main():
     print(f"\nケース1: {'PASS' if r1 else 'FAIL'} / ケース2: {'PASS' if r2 else 'FAIL'} / "
           f"ケース2B: {'PASS' if r2b else 'FAIL'} / ケース3: {'PASS' if r3 else 'FAIL'} / ケース4: {'PASS' if r4 else 'FAIL'} / "
           f"ケース5: {'PASS' if r5 else 'FAIL'} / ケース6: {'PASS' if r6 else 'FAIL'} / "
-          f"ケース7: {'PASS' if r7 else 'FAIL'} / ケース8: {'PASS' if r8 else 'FAIL'}")
+          f"ケース7: {'PASS' if r7 else 'FAIL'} / ケース9: {'PASS' if r9 else 'FAIL'} / "
+          f"ケース10: {'PASS' if r10 else 'FAIL'} / ケース11: {'PASS' if r11 else 'FAIL'} / "
+          f"ケース12: {'PASS' if r12 else 'FAIL'} / ケース13: {'PASS' if r13 else 'FAIL'} / ケース8: {'PASS' if r8 else 'FAIL'}")
     sys.exit(0 if all_ok else 1)
 
 

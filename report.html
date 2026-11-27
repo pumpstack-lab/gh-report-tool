@@ -154,6 +154,9 @@
       border-color: #dd6a12; background: #fff4ea; color: #c2570c; font-weight: bold;
     }
     .resident-tab-filled::after { content: ' \2713'; color: #2e7d32; font-weight: bold; }
+    /* 競合中の利用者のタブに付ける注意の印（B-1）。✓と同時に出ても構わない（別の意味の印なので併記）。 */
+    .resident-tab-conflict { border-color: #e74c3c; }
+    .resident-tab-conflict::before { content: '\26a0\fe0e '; color: #c0392b; }
     .resident-tabs-toggle {
       display: block; margin: 0 0 14px; padding: 8px 12px; min-height: 44px;
       font-size: 14px; font-family: inherit; border: 1.5px solid #e6d8ca; border-radius: 10px;
@@ -974,9 +977,12 @@
     }
 
     // 指定キーの欄だけを表示し、他は隠す（DOMからは消さない＝保存処理はそのまま全員分を読む）。
+    // keyが画面に居ない人（途中退所・改名・既に消えた短期入所枠など）を指す時は、
+    // 全員の欄を隠して真っ白にしてしまうため、何もせず今開いている人のまま戻す。
     function showResidentTab(key) {
-      activeResidentTabKey = key;
       const items = collectResidentTabTargets();
+      if (!residentTabsShowAll && !items.some(i => i.key === key)) return;
+      activeResidentTabKey = key;
       items.forEach(item => {
         const show = residentTabsShowAll || item.key === key;
         item.el.hidden = !show;
@@ -1004,6 +1010,24 @@
       btn.classList.toggle('resident-tab-filled', ResidentTabs.hasText(ta ? ta.value : ''));
     }
 
+    // 本文textareaへ値を書き込む唯一の経路。入力イベント経由であろうと無かろうと、
+    // ここを通せば✓印が必ず更新される（A-2: 個別に1行ずつ足すと洩れるため共通化した）。
+    function setResidentTextValue(ta, value, key) {
+      ta.value = value;
+      autoExpand(ta);
+      if (key) refreshResidentTabFilledMark(key);
+    }
+
+    // 競合中の利用者のタブに注意の印（！）を付ける。pendingConflicts.residentsと常に一致させる
+    // （解決してキーが消えればここで印も消える・B-1）。
+    function refreshConflictTabMarks() {
+      const conflictedNames = Object.keys((pendingConflicts && pendingConflicts.residents) || {});
+      const conflictedTabKeys = new Set(conflictedNames.map(tabKeyForFieldKey));
+      document.querySelectorAll('.resident-tab-btn').forEach(btn => {
+        btn.classList.toggle('resident-tab-conflict', conflictedTabKeys.has(btn.dataset.tabKey));
+      });
+    }
+
     function refreshAllResidentTabFilledMarks() {
       collectResidentTabTargets().forEach(item => refreshResidentTabFilledMark(item.key));
     }
@@ -1013,6 +1037,7 @@
       const bar = document.getElementById('resident-tabs-bar');
       const toggle = document.getElementById('resident-tabs-toggle');
       if (!bar || !toggle) return;
+      toggle.style.display = ''; // 利用者0人の時に隠した状態が残らないようにする（防御的に毎回戻す）
       const items = ResidentTabs.sortByKana(collectResidentTabTargets());
       bar.innerHTML = '';
       items.forEach(item => {
@@ -1030,6 +1055,7 @@
         bar.appendChild(btn);
       });
       refreshAllResidentTabFilledMarks();
+      refreshConflictTabMarks();
       // 保っていた人がまだ居ればその人のまま、居なければ先頭（要件3）
       const keepKey = items.some(i => i.key === activeResidentTabKey) ? activeResidentTabKey : (items[0] && items[0].key);
       document.getElementById('residents-container').classList.add('tabs-mode');
@@ -1046,8 +1072,11 @@
     document.getElementById('resident-tabs-toggle').addEventListener('click', () => toggleResidentTabsAll());
 
     // 指定キーの欄を開いた上でスクロール/フォーカスする（隠れたタブの中へ案内しても見えないため）。
+    // keyが画面に居ない人を指す時（途中退所・改名等）は、タブを動かさず今開いている人のまま戻す。
     function openResidentTabAndFocus(key, focusEl) {
       if (!key) return;
+      const items = collectResidentTabTargets();
+      if (!items.some(i => i.key === key)) return;
       if (!residentTabsShowAll) {
         const btn = document.querySelector(`.resident-tab-btn[data-tab-key="${CSS.escape(key)}"]`);
         if (btn) btn.click();
@@ -2975,13 +3004,15 @@
           openResidentTabAndFocus(tabKeyForFieldKey(name), null);
           const el2 = fieldForKey(name);
           if (!el2) return;
-          el2.value = restorable[name];
-          if (el2.tagName === 'TEXTAREA') autoExpand(el2);
+          if (el2.tagName === 'TEXTAREA') {
+            setResidentTextValue(el2, restorable[name], tabKeyForFieldKey(name));
+          } else {
+            el2.value = restorable[name];
+          }
         });
         bannerState.draftRestore = '';
         renderBanners();
         scheduleAutoSave();
-        refreshAllResidentTabFilledMarks();
       });
       document.getElementById('draft-restore-no').addEventListener('click', () => {
         try { localStorage.removeItem(ReportDraft.draftKey(ghNum, dateISO)); } catch (e) { /* 無視 */ }
@@ -3287,8 +3318,7 @@
         // 送信時スナップショットと今の値が違う＝往復中に職員が打っている。書き戻すと消える。
         if (snapResidents && ta.value !== snapResidents[name]) return;
         if (Object.prototype.hasOwnProperty.call(nextResidents, name) && ta.value !== nextResidents[name]) {
-          ta.value = nextResidents[name];
-          autoExpand(ta);
+          setResidentTextValue(ta, nextResidents[name], tabKeyForFieldKey(name));
         }
       });
       const deferred = (result.deferredReplacements && result.deferredReplacements.residents) || {};
@@ -3338,9 +3368,15 @@
       document.querySelectorAll('.resident-entry .conflict-banner, .short-stay-entry .conflict-banner')
         .forEach(el => el.remove());
       const residentConflicts = pendingConflicts.residents || {};
-      // 競合した欄がタブで隠れていると気づけない。最初の1件のタブを自動で開く。
+      // 競合した欄がタブで隠れていると気づけない。本文を打っている最中に別の人へ飛ばすと
+      // 続きを別の人の欄に打ってしまう事故になるため、本文の欄にフォーカスが無い時だけ
+      // 最初の1件のタブを自動で開く（B-1）。フォーカス中はタブの注意印（！）だけ付ける。
       const firstConflictKey = Object.keys(residentConflicts)[0];
-      if (firstConflictKey) openResidentTabAndFocus(tabKeyForFieldKey(firstConflictKey), null);
+      const focusedOnResidentBody = document.activeElement
+        && document.activeElement.tagName === 'TEXTAREA'
+        && document.activeElement.closest('.resident-entry, .short-stay-entry');
+      if (firstConflictKey && !focusedOnResidentBody) openResidentTabAndFocus(tabKeyForFieldKey(firstConflictKey), null);
+      refreshConflictTabMarks();
       Object.entries(residentConflicts).forEach(([name, otherValue]) => {
         let entry = Array.from(document.querySelectorAll('.resident-entry'))
           .find(e => e.dataset.name === name);
@@ -3391,12 +3427,12 @@
           const merged = !mine.trim() ? theirs
             : !theirs.trim() ? mine
             : `${theirs}\n${mine}`;
-          ta.value = merged;
-          if (ta.tagName === 'TEXTAREA') autoExpand(ta);
+          setResidentTextValue(ta, merged, tabKeyForFieldKey(name));
           // baseをサーバー現在値に合わせてから、合体した本文を保存し直す
           lastSaved.residents[name] = otherValueForAdopt;
           delete pendingConflicts.residents[name];
           if (Object.keys(pendingConflicts.residents).length === 0) delete pendingConflicts.residents;
+          refreshConflictTabMarks();
           banner.remove();
           refreshUnsavedBanner();
           scheduleAutoSave();
@@ -3411,6 +3447,7 @@
           lastSaved.residents[name] = otherValueForAdopt;
           delete pendingConflicts.residents[name];
           if (Object.keys(pendingConflicts.residents).length === 0) delete pendingConflicts.residents;
+          refreshConflictTabMarks();
           banner.remove();
           refreshUnsavedBanner(); // 解消したら未保存表示も消す（ネイト指摘B-8）
           scheduleAutoSave(); // 自分の内容で改めて保存を試みる（新しいbaseで送るため次回は通る）
@@ -3419,11 +3456,11 @@
           // 2026-09-15: 記録が消える操作は取り消せないため確認を挟む
           if (!confirm(`${labelOf(name)}の欄で、自分が書いた内容を消して相手の内容にします。よろしいですか？`)) return;
           const ta = fieldForKey(name);
-          ta.value = otherValueForAdopt;
-          if (ta.tagName === 'TEXTAREA') autoExpand(ta);
+          setResidentTextValue(ta, otherValueForAdopt, tabKeyForFieldKey(name));
           lastSaved.residents[name] = otherValueForAdopt;
           delete pendingConflicts.residents[name];
           if (Object.keys(pendingConflicts.residents).length === 0) delete pendingConflicts.residents;
+          refreshConflictTabMarks();
           banner.remove();
           refreshUnsavedBanner();
         });
@@ -3467,8 +3504,8 @@
         const [topKey, subKey] = key.split('.');
         const deferred = pendingDeferredReplacements;
         if (deferred && deferred[topKey] && subKey && Object.prototype.hasOwnProperty.call(deferred[topKey], subKey)) {
-          el.value = deferred[topKey][subKey];
-          autoExpand(el);
+          const tabKey = topKey === 'residents' ? tabKeyForFieldKey(subKey) : null;
+          setResidentTextValue(el, deferred[topKey][subKey], tabKey);
           delete deferred[topKey][subKey];
         }
       });
@@ -3485,6 +3522,7 @@
         .forEach(el => el.remove());
       pendingConflicts = {};
       pendingDeferredReplacements = {};
+      refreshConflictTabMarks(); // 前の日付の競合印を残さない
       setTopLevelConflictBanner(null);
       setFormInputsDisabled(true);
       const { data, error } = await db.from('reports').select('*')
@@ -3526,16 +3564,14 @@
         renderShortageList();
         document.querySelectorAll('.resident-entry').forEach(entry => {
           const ta = entry.querySelector('textarea');
-          ta.value = (data.residents || {})[entry.dataset.name] || '';
-          autoExpand(ta);
+          setResidentTextValue(ta, (data.residents || {})[entry.dataset.name] || '', entry.dataset.name);
         });
         // 短期入所枠の復元
         document.querySelectorAll('.short-stay-entry').forEach(entry => {
           const key = entry.dataset.shortStayKey;
           entry.querySelector('input').value = (data.residents || {})[key + 'name'] || '';
           const ta = entry.querySelector('textarea');
-          ta.value = (data.residents || {})[key] || '';
-          autoExpand(ta);
+          setResidentTextValue(ta, (data.residents || {})[key] || '', key);
         });
         uploadedPhotos = (data.photos || []).map(p => ({ url: p.url, path: p.path }));
         renderPhotoPreview();
@@ -3543,15 +3579,18 @@
         restoreWorkers(null);
         shortageItems = [];
         renderShortageList();
-        document.querySelectorAll('.resident-entry textarea').forEach(ta => {
+        document.querySelectorAll('.resident-entry').forEach(entry => {
+          const ta = entry.querySelector('textarea');
           ta.value = '';
           ta.style.height = '';
+          refreshResidentTabFilledMark(entry.dataset.name);
         });
         document.querySelectorAll('.short-stay-entry').forEach(entry => {
           entry.querySelector('input').value = '';
           const ta = entry.querySelector('textarea');
           ta.value = '';
           ta.style.height = '';
+          refreshResidentTabFilledMark(entry.dataset.shortStayKey);
         });
         uploadedPhotos = [];
         renderPhotoPreview();
