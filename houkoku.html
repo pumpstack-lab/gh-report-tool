@@ -8,7 +8,7 @@
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="scripts/auth_gate.js?v=1"></script>
   <script src="scripts/auth_ui.js?v=1"></script>
-  <script src="scripts/home_report.js?v=20261127b"></script>
+  <script src="scripts/home_report.js?v=20261127c"></script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     [hidden] { display: none !important; }
@@ -89,7 +89,6 @@
     }
     .item.current { border-color: #dd6a12; background: #fff8f1; }
     .item .t { font-size: 15px; font-weight: bold; color: #1a2a3a; }
-    .item .r { font-size: 13px; color: #5a6a7a; margin-top: 2px; }
     .item .x { font-size: 13px; color: #6b7a89; margin-top: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .empty { text-align: center; color: #6b7a89; font-size: 14px; padding: 18px 0; }
     .more { display: block; margin: 4px auto 0; }
@@ -121,8 +120,7 @@
       #sheet .form tr.r2 td { height: 11.5mm; }
       #sheet .title { font-size: 22pt; font-weight: bold; line-height: 1.3; padding-left: 7mm; white-space: nowrap; }
       #sheet .date { font-size: 14pt; line-height: 1.3; white-space: nowrap; }
-      #sheet .reporter { font-size: 11pt; text-align: right; margin-top: 5mm; }
-      #sheet .body { font-size: 12pt; line-height: 1.8; margin-top: 3mm; white-space: pre-wrap; overflow-wrap: anywhere; }
+      #sheet .body { font-size: var(--print-pt, 14pt); line-height: 1.8; margin-top: 6mm; white-space: pre-wrap; overflow-wrap: anywhere; }
     }
   </style>
 </head>
@@ -156,10 +154,6 @@
           <select id="in-gh"><option value="">選んでください</option></select>
         </div>
       </div>
-      <div class="field" id="f-reporter">
-        <label for="in-reporter">報告者</label>
-        <input type="text" id="in-reporter" autocomplete="off" placeholder="書いた人の名前">
-      </div>
       <div class="field" id="f-body">
         <label for="in-body">本文</label>
         <textarea id="in-body" placeholder="報告する内容を書いてください"></textarea>
@@ -172,6 +166,15 @@
         <input type="file" id="in-photo" accept="image/*" multiple hidden>
         <div class="count" id="photo-note"></div>
       </div>
+      <div class="field" id="f-size">
+        <label for="in-size">印刷の文字の大きさ</label>
+        <select id="in-size">
+          <option value="12">小（12 ポイント）</option>
+          <option value="14">中（14 ポイント）</option>
+          <option value="16">大（16 ポイント）</option>
+          <option value="18">特大（18 ポイント）</option>
+        </select>
+      </div>
       <div class="actions">
         <button type="button" class="btn btn-sub" id="btn-save">保存する</button>
         <button type="button" class="btn btn-main" id="btn-print">🖨 印刷する</button>
@@ -182,7 +185,7 @@
         <span></span>
         <button type="button" class="btn btn-danger" id="btn-delete" hidden>この報告書を消す</button>
       </div>
-      <p class="hint">「印刷する」を押すと、保存してから様式どおりの紙（A4）にして出します。写真は紙には載りません（この画面で見られます）。管理者・サービス管理責任者・報告者の枠は、印鑑用に空けてあります。</p>
+      <p class="hint">「印刷する」を押すと、保存してから様式どおりの紙（A4）にして出します。写真は紙には載りません（この画面で見られます）。管理者・サービス管理責任者・報告者の枠は、印鑑用に空けてあります（報告者は名前を打たず、枠に印鑑を押して出します）。</p>
     </div>
 
     <div class="card">
@@ -216,7 +219,6 @@
             <td class="c-stamp"></td><td class="c-stamp"></td><td class="c-stamp"></td>
           </tr>
         </table>
-        <div class="reporter" id="p-reporter"></div>
         <div class="body" id="p-body"></div>
       </td></tr></tbody>
     </table>
@@ -228,11 +230,13 @@
     const DRAFT_KEY = 'houkoku_draft_v1';
     const DRAFT_DAYS = 3;   // 共用の端末に書きかけを残す日数
     const LAST_GH_KEY = 'houkoku_last_gh';
-    const COLS = 'id,gh_num,report_date,reporter,body,photos,updated_at';
+    const SIZE_KEY = 'houkoku_print_pt';   // 印刷の文字の大きさ（端末ごとに覚える。報告書には持たない）
+    const SIZES = ['12', '14', '16', '18'], SIZE_DEFAULT = '14';
+    const COLS = 'id,gh_num,report_date,body,photos,updated_at';
     const BUCKET = 'home-report-photos';
     const PHOTO_EDGE = 1600;   // 長い辺の上限（印刷しても粗く見えない大きさ・1 枚 0.2〜0.5MB ほど）
     const $ = id => document.getElementById(id);
-    const el = { date: $('in-date'), gh: $('in-gh'), reporter: $('in-reporter'), body: $('in-body') };
+    const el = { date: $('in-date'), gh: $('in-gh'), body: $('in-body') };
 
     // 管理画面のサイトの「ホームを選ぶ画面」から来た時は、そこへ戻す（入口が 2 つあるため）
     if (new URLSearchParams(location.search).get('back') === 'cs') {
@@ -248,6 +252,7 @@
     let limit = PAGE;
     let hasMore = false;
     let busy = false;
+    let pendingDraft = false;   // 前の書きかけの知らせが出ている間は真。その間は端末の書きかけを上書きも消しもしない
     let photos = [];       // 画面に出ている写真 [{path}]
     const photoUrl = {};   // path → 見るための住所（期限つき・DB には入れない）
     const photoUrlAt = {}; // path → 住所を作った時刻（送ったばかりの写真は端末の中の住所なので持たない）
@@ -272,13 +277,23 @@
       return `${d.getMonth() + 1}/${d.getDate()} ${d.getHours()}:${String(d.getMinutes()).padStart(2, '0')}`;
     }
 
+    // 印刷の文字の大きさ：選んだらすぐ紙に効かせて、端末に覚える
+    function applySize(v) {
+      const pt = SIZES.includes(String(v)) ? String(v) : SIZE_DEFAULT;
+      $('in-size').value = pt;
+      $('sheet').style.setProperty('--print-pt', pt + 'pt');
+      return pt;
+    }
+    applySize(store(s => s.getItem(SIZE_KEY)));
+    $('in-size').addEventListener('change', () => { const pt = applySize($('in-size').value); store(s => s.setItem(SIZE_KEY, pt)); });
+
     HR.HOMES.forEach(h => {
       el.gh.add(new Option(h.name, String(h.num)));
       $('filter-gh').add(new Option(h.name, String(h.num)));
     });
 
     function current() {
-      return { report_date: el.date.value, gh_num: el.gh.value, reporter: el.reporter.value, body: el.body.value, photos };
+      return { report_date: el.date.value, gh_num: el.gh.value, body: el.body.value, photos };
     }
     function setStatus(text, isErr) {
       $('status').textContent = text || '';
@@ -287,7 +302,7 @@
     function clearBad() { document.querySelectorAll('.field.bad').forEach(f => f.classList.remove('bad')); }
     function setBusy(v) {
       busy = v;
-      ['btn-save', 'btn-print', 'btn-delete', 'btn-new', 'btn-photo'].forEach(id => { $(id).disabled = v; });
+      ['btn-save', 'btn-print', 'btn-delete', 'btn-new', 'btn-photo', 'btn-discard', 'btn-draft-use', 'btn-draft-drop', 'filter-gh'].forEach(id => { $(id).disabled = v; });
       document.querySelectorAll('.ph button').forEach(b => { b.disabled = v; });
       if (!v) updatePhotoNote();
     }
@@ -393,6 +408,7 @@
         let res;
         try { res = await db.storage.from(BUCKET).upload(path, blob, { contentType: 'image/jpeg', upsert: false }); } catch (err) { res = { error: err }; }
         if (res.error) { failed++; continue; }
+        if ((saved ? saved.id : newId) !== owner) break;       // 送っている間に別の報告書へ切り替わっていたら、その報告書には付けない
         photoUrl[path] = URL.createObjectURL(blob);          // 送った写真はそのまま見せる（取り直さない）
         photos = photos.concat([{ path }]);
         renderPhotos(); saveDraft();
@@ -407,17 +423,18 @@
     });
 
     // 書きかけは端末の中に持つ（保存できたら消す）。閉じても、通信が切れても本文を失わないため。
+    function dropDraft() { if (!pendingDraft) store(s => s.removeItem(DRAFT_KEY)); }
     function saveDraft() {
+      if (pendingDraft) return;
       if (HR.isDirty(current(), saved)) {
         store(s => s.setItem(DRAFT_KEY, JSON.stringify({ id: saved ? saved.id : null, base: saved ? saved.updated_at : null, newId, at: Date.now(), ...current() })));
       } else {
-        store(s => s.removeItem(DRAFT_KEY));
+        dropDraft();
       }
     }
     function fill(v) {
       el.date.value = v.report_date || todayISO();
       el.gh.value = v.gh_num == null ? '' : String(v.gh_num);
-      el.reporter.value = v.reporter || '';
       el.body.value = v.body || '';
       photos = HR.normPhotos(v.photos);
       renderPhotos(); loadPhotoUrls(photos);
@@ -426,11 +443,11 @@
     function startNew() {
       saved = null;
       newId = makeId();
-      fill({ report_date: todayISO(), gh_num: store(s => s.getItem(LAST_GH_KEY)) || '', reporter: '', body: '' });
+      fill({ report_date: todayISO(), gh_num: store(s => s.getItem(LAST_GH_KEY)) || '', body: '' });
     }
 
     Object.values(el).forEach(input => {
-      const onEdit = () => { $('draft-card').hidden = true; updateCount(); updateMode(); saveDraft(); setStatus(''); input.closest('.field').classList.remove('bad'); };
+      const onEdit = () => { updateCount(); updateMode(); saveDraft(); setStatus(''); input.closest('.field').classList.remove('bad'); };
       input.addEventListener('input', onEdit);
       input.addEventListener('change', onEdit);
     });
@@ -450,12 +467,11 @@
         b.className = 'item' + (saved && saved.id === r.id ? ' current' : '');
         b.dataset.id = r.id;
         const t = document.createElement('div'); t.className = 't'; t.textContent = HR.listLabel(r);
-        const who = document.createElement('div'); who.className = 'r'; who.textContent = `報告者：${r.reporter}`;
         const x = document.createElement('div'); x.className = 'x';
         const np = HR.normPhotos(r.photos).length;
         x.textContent = (np ? `📷${np} ` : '') + String(r.body || '').split('\n')[0];
         const u = document.createElement('div'); u.className = 'u'; u.textContent = `最後に保存：${stamp(r.updated_at)}`;
-        b.append(t, who, x, u);
+        b.append(t, x, u);
         b.addEventListener('click', () => openRow(r));
         box.appendChild(b);
       });
@@ -484,7 +500,7 @@
       if (saved && saved.id === r.id) return;
       if (HR.isDirty(current(), saved) && !confirm('書きかけの内容があります。捨てて、選んだ報告書を開きますか？')) return;
       saved = r;
-      store(s => s.removeItem(DRAFT_KEY));
+      dropDraft();
       fill(r);
       setStatus('');
       window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -528,7 +544,7 @@
         return null;
       }
       saved = row;
-      store(s => { s.removeItem(DRAFT_KEY); s.setItem(LAST_GH_KEY, String(row.gh_num)); });
+      dropDraft(); store(s => s.setItem(LAST_GH_KEY, String(row.gh_num)));
       fill(row);
       setStatus('保存しました');
       loadList();
@@ -538,13 +554,15 @@
     function fillSheet(r) {
       $('p-date').textContent = HR.formatWareki(r.report_date);
       $('p-home').textContent = HR.homeName(r.gh_num);
-      $('p-reporter').textContent = `報告者：${r.reporter}`;
       $('p-body').textContent = r.body;
     }
 
     $('btn-save').addEventListener('click', () => { if (!busy) save(); });
+    let printing = false;   // 続けて押しても印刷は 1 回（保存が要らない時は busy にならないため、別に持つ）
     $('btn-print').addEventListener('click', async () => {
-      if (busy) return;
+      if (busy || printing) return;
+      printing = true;
+      setTimeout(() => { printing = false; }, 1500);
       let row = await save();
       if (!row) {
         // 紙が目的なので、保存に失敗しても刷れるようにする（入力の不足は刷らない）
@@ -556,14 +574,16 @@
       window.print();
     });
     $('btn-new').addEventListener('click', () => {
+      if (busy) return;
       if (HR.isDirty(current(), saved) && !confirm('直した所を保存していません。捨てて、新しく書きますか？')) return;
-      store(s => s.removeItem(DRAFT_KEY));
+      dropDraft();
       startNew();
       setStatus('');
     });
     $('btn-discard').addEventListener('click', () => {
+      if (busy) return;
       if (!confirm('書きかけの内容を捨てますか？')) return;
-      store(s => s.removeItem(DRAFT_KEY));
+      dropDraft();
       startNew();
       setStatus('');
     });
@@ -576,7 +596,7 @@
       try { res = await db.from('home_reports').update({ deleted_at: new Date().toISOString() }).eq('id', saved.id).select('id'); } catch (e) { res = { error: e }; }
       setBusy(false);
       if (res.error || !res.data || !res.data.length) { setStatus('消せませんでした。電波の良い所でもう一度お試しください。', true); return; }
-      store(s => s.removeItem(DRAFT_KEY));
+      dropDraft();
       startNew();
       setStatus('消しました');
       loadList();
@@ -591,12 +611,16 @@
       let draft = null;
       try { draft = raw ? JSON.parse(raw) : null; } catch (e) { draft = null; }
       const fresh = draft && typeof draft.at === 'number' && Date.now() - draft.at < DRAFT_DAYS * 86400000;
-      if (!fresh || !HR.isDirty(draft, null)) { store(s => s.removeItem(DRAFT_KEY)); return; }
+      if (!fresh || !HR.isDirty(draft, null)) { dropDraft(); return; }
       // 共用の端末なので黙って戻さない。誰の・いつの書きかけかを見せて選んでもらう
-      const who = HR.normReporter(draft.reporter);
-      $('draft-text').textContent = `${stamp(draft.at)} の書きかけがあります${who ? `（報告者：${who}）` : ''}。続きを書きますか？`;
+      const home = HR.homeName(draft.gh_num);
+      $('draft-text').textContent = `${stamp(draft.at)} の書きかけがあります${home ? `（${home}）` : ''}。続きを書きますか？`;
+      pendingDraft = true;
       $('draft-card').hidden = false;
       $('btn-draft-use').onclick = async () => {
+        if (busy) return;
+        // 知らせを出したまま打ち始めていた時は、いま画面にある方を捨ててよいか確かめる
+        if (HR.isDirty(current(), saved) && !confirm('いま画面に書いてある内容を捨てて、前の書きかけを開きますか？')) return;
         let base = null;
         if (draft.id) {
           // 直していた元の報告書は、一覧（先頭の 30 件）に無くても番号で取りに行く
@@ -611,15 +635,19 @@
         saved = base ? { ...base, updated_at: draft.base || base.updated_at } : null;
         if (!saved) newId = (!draft.id && draft.newId) || makeId();
         fill(draft);
+        pendingDraft = false;
         $('draft-card').hidden = true;
         setStatus(draft.id && !base
           ? '書きかけを戻しました。元の報告書は消されているので、新しい報告書として保存されます'
           : '書きかけを戻しました（まだ保存していません）');
       };
       $('btn-draft-drop').onclick = () => {
-        if (!confirm('書きかけの内容を捨てますか？')) return;
+        if (busy) return;
+        if (!confirm('前の書きかけを捨てますか？')) return;
+        pendingDraft = false;
         store(s => s.removeItem(DRAFT_KEY));
         $('draft-card').hidden = true;
+        saveDraft();       // いま画面に書いてある内容があれば、それを書きかけとして持つ
       };
     });
   </script>

@@ -1,4 +1,4 @@
-// ホーム報告書の計算部分（純粋関数）。houkoku.html と node の両方から読む UMD。
+// ホーム報告書の計算部分（純粋関数）。報告者の名前は持たない（紙の枠に印鑑を押して出す＝オーナー決定 2026-11-27）。houkoku.html と node の両方から読む UMD。
 // 設計: docs/superpowers/specs/2026-11-27-home-report-design.md
 (function (root, factory) {
   const mod = factory();
@@ -14,7 +14,6 @@
     { num: 5, name: 'こもれびホーム６' },
     { num: 6, name: 'こもれびホームマハロ' },
   ];
-  const REPORTER_MAX = 40;
   const BODY_MAX = 8000;
   const PHOTO_MAX = 4;
   // 写真の置き場の中の名前：<報告書の番号>/<写真の番号>.jpg（どちらも画面側で作る uuid）
@@ -55,9 +54,6 @@
   function normBody(v) {
     return normText(v).split('\n').map(l => l.replace(/[ \t　]+$/, '')).join('\n').replace(/\n+$/, '').replace(/^\n+/, '');
   }
-  function normReporter(v) {
-    return normText(v).replace(/\n/g, ' ').trim();
-  }
 
   /** 写真の一覧 → [{path}]（形の正しいものだけ・同じ写真は 1 回だけ・順番はそのまま） */
   function normPhotos(v) {
@@ -78,34 +74,30 @@
     if (!isValidDate(src.report_date)) return { error: '日付を入れてください', field: 'report_date' };
     const gh = Number(src.gh_num);
     if (src.gh_num === '' || src.gh_num == null || !homeName(gh)) return { error: 'ホームを選んでください', field: 'gh_num' };
-    const reporter = normReporter(src.reporter);
-    if (!reporter) return { error: '報告者の名前を入れてください', field: 'reporter' };
-    if (reporter.length > REPORTER_MAX) return { error: `報告者の名前は ${REPORTER_MAX} 文字までです`, field: 'reporter' };
     const body = normBody(src.body);
     if (!body) return { error: '本文を入れてください', field: 'body' };
     if (body.length > BODY_MAX) return { error: `本文は ${BODY_MAX} 文字までです（今 ${body.length} 文字）`, field: 'body' };
     const photos = normPhotos(src.photos);
     if (photos.length > PHOTO_MAX) return { error: `写真は ${PHOTO_MAX} 枚までです`, field: 'photos' };
-    return { value: { report_date: String(src.report_date), gh_num: gh, reporter, body, photos } };
+    return { value: { report_date: String(src.report_date), gh_num: gh, body, photos } };
   }
 
   /** 画面の中身が、保存済み（無ければ空の新規）と違うか。日付だけの違いは新規では数えない。 */
   function isDirty(current, saved) {
     const c = current || {};
-    if (!saved) return normReporter(c.reporter) !== '' || normBody(c.body) !== '' || normPhotos(c.photos).length > 0;
+    if (!saved) return normBody(c.body) !== '' || normPhotos(c.photos).length > 0;
     return String(c.report_date) !== String(saved.report_date)
       || Number(c.gh_num) !== Number(saved.gh_num)
-      || normReporter(c.reporter) !== normReporter(saved.reporter)
       || normBody(c.body) !== normBody(saved.body)
       || photoKey(c.photos) !== photoKey(saved.photos);
   }
 
-  /** 一覧の 1 行の見出し（名前は出さない＝報告者は別の欄で出す） */
+  /** 一覧の 1 行の見出し */
   function listLabel(row) {
     const p = parseDate(row && row.report_date);
     const when = p ? `${p.mo}/${p.d}（${DAYS[p.dow]}）` : '';
     return `${when} ${homeName(row && row.gh_num)}`.trim();
   }
 
-  return { HOMES, REPORTER_MAX, BODY_MAX, PHOTO_MAX, normPhotos, isValidDate, formatWareki, homeName, validate, isDirty, listLabel, normBody, normReporter };
+  return { HOMES, BODY_MAX, PHOTO_MAX, normPhotos, isValidDate, formatWareki, homeName, validate, isDirty, listLabel, normBody };
 });

@@ -197,7 +197,6 @@ def fill_form(page, gh="3", reporter="見本 太郎", body=SAMPLE_BODY, date=Non
     if date:
         page.fill("#in-date", date)
     page.select_option("#in-gh", gh)
-    page.fill("#in-reporter", reporter)
     page.fill("#in-body", body)
 
 
@@ -223,10 +222,10 @@ def run_engine(pw, engine):
         ctx, page, errors = open_page(browser, mock, w, h)
 
         # 1. 開いた時
-        check("欄が最初から 4 つとも見えている", all(page.is_visible(s) for s in ("#in-date", "#in-gh", "#in-reporter", "#in-body")))
+        check("欄が最初から 4 つとも見えている", all(page.is_visible(s) for s in ("#in-date", "#in-gh", "#in-body", "#btn-photo")))
         check("日付は今日（日本の暦）", page.input_value("#in-date") == today, page.input_value("#in-date"))
         check("ホームは 6 つ＋「選んでください」", page.locator("#in-gh option").count() == 7)
-        check("報告者は空（共用の端末なので覚えない）", page.input_value("#in-reporter") == "")
+        check("報告者の名前を打つ欄は無い（紙の枠に印鑑を押して出す）", page.locator("#in-reporter").count() == 0 and "報告者：" not in page.inner_text("body"))
         check("一覧に保存済みの 2 件（新しい順）", [x.get_attribute("data-id")[-1] for x in page.locator(".item").all()] == ["2", "1"])
         check("開く時の DB への依頼は 1 回", len(mock.calls) == 1, str(len(mock.calls)))
         check("一覧の本文は文字のまま出る（太字にならない）", page.locator(".item b").count() == 0 and "<b>" in page.locator(".item .x").first.inner_text())
@@ -241,9 +240,6 @@ def run_engine(pw, engine):
         check("空のまま保存 → ホームの欄を指して知らせる・書き込み 0", "ホームを選んでください" in status(page) and not writes(mock), status(page))
         page.select_option("#in-gh", "3")
         page.click("#btn-save")
-        check("報告者が空 → 知らせる", "報告者" in status(page))
-        page.fill("#in-reporter", "見本 太郎")
-        page.click("#btn-save")
         check("本文が空 → 知らせる・書き込み 0", "本文" in status(page) and not writes(mock))
 
         # 3. 保存 → 一覧に出る
@@ -254,8 +250,8 @@ def run_engine(pw, engine):
         w1 = writes(mock)
         check("保存 → 書き込み 1 本（POST）", len(w1) == 1 and w1[0]["method"] == "POST", str([c["method"] for c in w1]))
         body = w1[0]["body"] if w1 else {}
-        check("送る中身：日付・ホーム・報告者・本文・画面で作った番号",
-              body.get("gh_num") == 3 and body.get("reporter") == "見本 太郎" and body.get("body") == SAMPLE_BODY
+        check("送る中身：日付・ホーム・本文・画面で作った番号（報告者の名前は送らない）",
+              body.get("gh_num") == 3 and "reporter" not in body and body.get("body") == SAMPLE_BODY
               and body.get("report_date") == today and len(str(body.get("id", ""))) == 36, json.dumps(body, ensure_ascii=False)[:120])
         check("「保存しました」", status(page) == "保存しました", status(page))
         check("保存した報告書が一覧の先頭に出て、開いている印が付く",
@@ -307,11 +303,11 @@ def run_engine(pw, engine):
         page.evaluate("document.getElementById('btn-save').click(); document.getElementById('btn-save').click();")
         page.wait_for_timeout(500)
         check("保存を 2 回続けて押しても 1 枚", sum(1 for r in mock.rows if r["body"] == "二度押しの見本") == 1)
-        check("次に書く時、ホームは直前のホームが入っている", page.click("#btn-new") is None and page.input_value("#in-gh") == "1" and page.input_value("#in-reporter") == "")
+        check("次に書く時、ホームは直前のホームが入っている", page.click("#btn-new") is None and page.input_value("#in-gh") == "1")
 
         # 8. 一覧から開く・絞る・消す
         page.locator('.item[data-id$="0002"]').click()
-        check("一覧から開く → 欄に入る", page.input_value("#in-gh") == "6" and page.input_value("#in-reporter") == "見本 花子" and page.input_value("#in-date") == "2026-11-25")
+        check("一覧から開く → 欄に入る", page.input_value("#in-gh") == "6" and page.input_value("#in-date") == "2026-11-25")
         check("開いた時は「新しく書く」「この報告書を消す」が出る", page.is_visible("#btn-new") and page.is_visible("#btn-delete"))
         page.select_option("#filter-gh", "6")
         page.wait_for_timeout(350)
@@ -332,8 +328,8 @@ def run_engine(pw, engine):
         fill_form(page, gh="4", reporter="見本 三郎", body="書きかけの見本")
         page.reload(wait_until="networkidle")
         page.wait_for_timeout(300)
-        check("開き直すと、書きかけは黙って戻さず知らせを出す（誰の・いつの）",
-              page.is_visible("#draft-card") and "見本 三郎" in page.inner_text("#draft-text") and page.input_value("#in-body") == "")
+        check("開き直すと、書きかけは黙って戻さず知らせを出す（いつの・どのホームの）",
+              page.is_visible("#draft-card") and "書きかけがあります（こもれびホーム５−２）" in page.inner_text("#draft-text") and page.input_value("#in-body") == "")
         page.click("#btn-draft-use")
         check("「続きを書く」→ 欄に戻る", page.input_value("#in-body") == "書きかけの見本" and page.input_value("#in-gh") == "4" and not page.is_visible("#draft-card"))
         page.reload(wait_until="networkidle")
@@ -341,6 +337,22 @@ def run_engine(pw, engine):
         page.once("dialog", lambda d: d.accept())
         page.click("#btn-draft-drop")
         check("「捨てる」→ 端末から消える", page.evaluate("localStorage.getItem('houkoku_draft_v1')") is None and not page.is_visible("#draft-card"))
+        fill_form(page, gh="5", body="前の人の長い書きかけ")
+        page.reload(wait_until="networkidle")
+        page.wait_for_timeout(300)
+        page.fill("#in-body", "知らせを読まずに打ち始めた")
+        check("知らせを無視して打ち始めても、知らせは消えず、前の書きかけは端末に残る",
+              page.is_visible("#draft-card") and "前の人の長い書きかけ" in (page.evaluate("localStorage.getItem('houkoku_draft_v1')") or ""))
+        page.select_option("#in-gh", "1")
+        page.click("#btn-save")
+        page.wait_for_timeout(450)
+        check("そのまま保存しても、前の書きかけは消えない", status(page) == "保存しました" and "前の人の長い書きかけ" in (page.evaluate("localStorage.getItem('houkoku_draft_v1')") or ""))
+        page.click("#btn-new")
+        page.click("#btn-draft-use")
+        page.wait_for_timeout(300)
+        check("後から「続きを書く」で前の書きかけを開ける", page.input_value("#in-body") == "前の人の長い書きかけ" and page.input_value("#in-gh") == "5")
+        page.once("dialog", lambda d: d.accept())
+        page.click("#btn-discard")
         page.evaluate("localStorage.setItem('houkoku_draft_v1', JSON.stringify({id:null,newId:'x',at:Date.now()-4*86400000,report_date:'2026-11-20',gh_num:'1',reporter:'古い 見本',body:'古い書きかけ'}))")
         page.reload(wait_until="networkidle")
         page.wait_for_timeout(300)
@@ -385,17 +397,41 @@ def run_engine(pw, engine):
         page.wait_for_timeout(500)
         check("印刷する → 先に保存（書き込み 1 本）してから印刷が 1 回", len(writes(mock)) == n0 + 1 and page.evaluate("window.__printed") == 1)
         check("紙の日付は様式どおりの和暦", page.evaluate("document.getElementById('p-date').textContent") == "令和8年5月20日（水）")
+        check("紙に報告者の名前は出ない・本文は表のすぐ下から", "報告者：" not in page.evaluate("document.getElementById('sheet').textContent"))
         check("紙のホームの欄にホームの名前", page.evaluate("document.getElementById('p-home').textContent") == "こもれびホームマハロ")
         check("紙の本文は文字のまま・改行も残る",
               page.evaluate("document.getElementById('p-body').textContent") == "印刷の見本\n<i>斜めにならない</i>" and page.locator("#p-body i").count() == 0)
         check("印鑑の枠 3 つは空", page.evaluate("[...document.querySelectorAll('#sheet tr.r2 td')].every(td => td.textContent === '')"))
         check("画面では紙は見えない", not page.is_visible("#sheet"))
+        def body_pt():
+            page.emulate_media(media="print")
+            px = page.evaluate("parseFloat(getComputedStyle(document.getElementById('p-body')).fontSize)")
+            page.emulate_media(media="screen")
+            return round(px * 72 / 96, 1)
+        check("印刷の文字の大きさは、最初は「中」（14 ポイント）", page.input_value("#in-size") == "14" and body_pt() == 14.0, str(body_pt()))
+        page.select_option("#in-size", "18")
+        check("「特大」を選ぶと、紙の本文が 18 ポイントになる", body_pt() == 18.0, str(body_pt()))
+        page.select_option("#in-size", "12")
+        check("「小」は今までと同じ 12 ポイント", body_pt() == 12.0)
+        page.select_option("#in-size", "16")
+        page.reload(wait_until="networkidle")
+        page.wait_for_timeout(300)
+        page.evaluate("(() => { window.__printed = 0; window.print = () => { window.__printed++; }; })()")
+        check("選んだ大きさは端末が覚えている（開き直しても「大」）", page.input_value("#in-size") == "16" and body_pt() == 16.0)
+        page.evaluate("localStorage.setItem('houkoku_print_pt', '999')")
+        page.reload(wait_until="networkidle")
+        page.wait_for_timeout(300)
+        page.evaluate("(() => { window.__printed = 0; window.print = () => { window.__printed++; }; })()")
+        check("覚えている値がおかしい時は「中」に戻る", page.input_value("#in-size") == "14")
+        fill_form(page, gh="6", body="印刷の見本")
+        page.wait_for_timeout(1600)      # 続けて押した扱いにならない間を空ける
         mock.fail_writes = 1
         page.fill("#in-body", "保存できない時の見本")
+        n_print = page.evaluate("window.__printed")
         page.once("dialog", lambda d: d.accept())
         page.click("#btn-print")
         page.wait_for_timeout(500)
-        check("保存に失敗しても、確かめた上で印刷はできる", page.evaluate("window.__printed") == 2 and page.evaluate("document.getElementById('p-body').textContent") == "保存できない時の見本")
+        check("保存に失敗しても、確かめた上で印刷はできる", page.evaluate("window.__printed") == n_print + 1 and page.evaluate("document.getElementById('p-body').textContent") == "保存できない時の見本")
 
         # 10b. 写真
         ctx.close()

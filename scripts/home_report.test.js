@@ -27,20 +27,19 @@ test('homeName: 1〜6 だけ', () => {
 });
 test('validate: そろっていれば値を整えて返す', () => {
   const r = HR.validate({ report_date: '2026-11-27', gh_num: '3', reporter: '  報告 者  ', body: '本文\r\nです  \n\n' });
-  assert.deepEqual(r, { value: { report_date: '2026-11-27', gh_num: 3, reporter: '報告 者', body: '本文\nです', photos: [] } });
+  assert.deepEqual(r, { value: { report_date: '2026-11-27', gh_num: 3, body: '本文\nです', photos: [] } });
+  assert.equal('reporter' in r.value, false);   // 報告者の名前は持たない（送らない）
 });
 test('validate: 足りない所を欄の名前つきで返す（最初の 1 つ）', () => {
   const ok = { report_date: '2026-11-27', gh_num: 3, reporter: 'あ', body: 'い' };
   assert.deepEqual(HR.validate({ ...ok, report_date: '' }), { error: '日付を入れてください', field: 'report_date' });
   assert.deepEqual(HR.validate({ ...ok, gh_num: '' }), { error: 'ホームを選んでください', field: 'gh_num' });
   assert.deepEqual(HR.validate({ ...ok, gh_num: 9 }), { error: 'ホームを選んでください', field: 'gh_num' });
-  assert.deepEqual(HR.validate({ ...ok, reporter: '   ' }), { error: '報告者の名前を入れてください', field: 'reporter' });
+  assert.ok(HR.validate({ report_date: '2026-11-27', gh_num: 3, body: 'い' }).value);   // 報告者が無くても通る
   assert.deepEqual(HR.validate({ ...ok, body: ' \n ' }), { error: '本文を入れてください', field: 'body' });
 });
 test('validate: 長すぎる', () => {
   const ok = { report_date: '2026-11-27', gh_num: 3, reporter: 'あ', body: 'い' };
-  assert.equal(HR.validate({ ...ok, reporter: 'あ'.repeat(HR.REPORTER_MAX + 1) }).field, 'reporter');
-  assert.ok(HR.validate({ ...ok, reporter: 'あ'.repeat(HR.REPORTER_MAX) }).value);
   assert.equal(HR.validate({ ...ok, body: 'い'.repeat(HR.BODY_MAX + 1) }).field, 'body');
   assert.ok(HR.validate({ ...ok, body: 'い'.repeat(HR.BODY_MAX) }).value);
 });
@@ -48,7 +47,8 @@ test('isDirty: 保存済みと同じなら false（前後の空白・改行の�
   const saved = { report_date: '2026-11-27', gh_num: 3, reporter: 'あ', body: 'い\nう' };
   assert.equal(HR.isDirty({ report_date: '2026-11-27', gh_num: '3', reporter: ' あ ', body: 'い\r\nう\n' }, saved), false);
   assert.equal(HR.isDirty({ ...saved, body: 'い\nうえ' }, saved), true);
-  assert.equal(HR.isDirty({ report_date: '2026-11-27', gh_num: '', reporter: '', body: '' }, null), false);
+  assert.equal(HR.isDirty({ report_date: '2026-11-27', gh_num: '', body: '' }, null), false);
+  assert.equal(HR.isDirty({ ...saved, reporter: '別の名前' }, saved), false);   // 昔の行に名前が残っていても、違いに数えない
   assert.equal(HR.isDirty({ report_date: '2026-11-27', gh_num: '', reporter: '', body: 'あ' }, null), true);
 });
 test('listLabel: 一覧の 1 行', () => {
