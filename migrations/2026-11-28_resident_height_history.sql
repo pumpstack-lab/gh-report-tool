@@ -18,6 +18,7 @@ alter table resident_height_history enable row level security;
 revoke all on resident_height_history from anon, authenticated;
 
 -- 前からある身長は「最初から」の値として 1 件ずつ入れる（2000-01-01＝どの月より前）。2 回流しても増えない。
+-- ⚠️ この取り込みを流すのは、新しい画面（身長を履歴に書くコード）を出す前だけ。出した後に流し直すと、画面で消した・直した「最初からの値」が古い値で入り直る。
 insert into resident_height_history (resident_id, from_month, height_cm)
 select h.resident_id, date '2000-01-01', h.height_cm
 from resident_heights h
