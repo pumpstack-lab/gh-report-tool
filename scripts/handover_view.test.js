@@ -6,7 +6,7 @@ const D = '2026-11-28';
 const data = {
   facilities: [
     { key: 'respoir', submitted_at: null, reporter: null, notice: null },
-    { key: 'komoan', submitted_at: '2026-11-28T07:12:00+00:00', reporter: '報告者A', notice: '明日は早く送ります' },
+    { key: 'komoan', submitted_at: '2026-11-28T07:12:00+00:00', updated_at: '2026-11-28T07:12:30+00:00', reporter: '報告者A', notice: '明日は早く送ります' },
     { key: 'btype', submitted_at: '2026-11-28T16:05:00+09:00', reporter: '報告者B', notice: '  ' },
   ],
   notes: [
@@ -80,4 +80,13 @@ test('shouldRefresh: 5 分以上たっていれば取り直す', () => {
   assert.equal(H.shouldRefresh(0, 1000), true);
   assert.equal(H.shouldRefresh(1000, 1000 + 4 * 60 * 1000), false);
   assert.equal(H.shouldRefresh(1000, 1000 + 5 * 60 * 1000), true);
+});
+
+test('build: 始めていない事業所の「まだ」は出さない・直した時刻は出す', () => {
+  const v = H.build({ facilities: [
+    { key: 'respoir', submitted_at: null, running: false },
+    { key: 'hana', submitted_at: null, running: true },
+    { key: 'komoan', submitted_at: '2026-11-28T07:12:00+00:00', updated_at: '2026-11-28T09:02:00+00:00', running: true },
+  ], notes: [], fixed: [] }, D);
+  assert.deepEqual(v.status.map(s => s.text), ['HANAこも庵 まだ', 'こも庵 16:12 届いた（18:02 に直し）']);
 });

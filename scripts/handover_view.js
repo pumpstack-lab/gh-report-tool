@@ -64,11 +64,16 @@
     const fixed = Array.isArray(src.fixed) ? src.fixed : [];
     const order = k => { const i = FACILITY_ORDER.indexOf(k); return i < 0 ? 99 : i; };
 
-    const status = facilities.slice().sort((a, b) => order(a.key) - order(b.key)).map(f => {
-      const name = sourceName(f.key);
-      const sent = !!f.submitted_at;
-      return { key: f.key, name, sent, text: sent ? `${name} ${timeLabel(f.submitted_at)} 届いた` : `${name} まだ` };
-    });
+    // running が false の事業所（この 7 日に 1 回も送っていない＝まだ始めていない）は、帯に出さない。
+    // 毎日「まだ」が並ぶと、本当の入れ忘れが読まれなくなるため。running が無い古い返り値は出す。
+    const status = facilities.filter(f => f.submitted_at || f.running !== false)
+      .sort((a, b) => order(a.key) - order(b.key)).map(f => {
+        const name = sourceName(f.key);
+        const sent = !!f.submitted_at;
+        const at = timeLabel(f.submitted_at), up = timeLabel(f.updated_at);
+        const text = sent ? `${name} ${at} 届いた${up && up !== at ? `（${up} に直し）` : ''}` : `${name} まだ`;
+        return { key: f.key, name, sent, text };
+      });
     const notices = facilities.filter(f => f.submitted_at && hasText(f.notice))
       .sort((a, b) => order(a.key) - order(b.key))
       .map(f => ({ name: sourceName(f.key), body: String(f.notice), reporter: String(f.reporter || '') }));

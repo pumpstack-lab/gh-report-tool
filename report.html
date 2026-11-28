@@ -1217,6 +1217,9 @@
       if (errorText) {
         band.appendChild(hoEl('div', 'section-label', '【事業所からの申し送り】'));
         band.appendChild(hoEl('div', 'handover-error', errorText));
+        const retry = band.appendChild(hoEl('button', 'handover-jump', 'もう一度読み込む'));
+        retry.type = 'button';
+        retry.addEventListener('click', () => { if (handoverDate) loadHandover(handoverDate); });
         band.hidden = false;
         return;
       }
@@ -1252,14 +1255,19 @@
       refreshHandoverTabMarks();
     }
 
+    // 前の日の申し送りを画面から消す（日付を変えた瞬間に呼ぶ。日報の読み込みが失敗しても、別の日の分が残らない）
+    function clearHandover(dateISO) {
+      ++handoverSeq;                         // 走っている読み込みの応答は捨てる
+      handoverView = null; handoverDate = dateISO; handoverFetchedAt = 0;
+      const band = document.getElementById('handover-band');
+      band.hidden = true; band.textContent = '';   // 隠すだけでなく中身も消す
+      document.querySelectorAll('#residents-container .handover-box-slot').forEach(b => b.remove());
+      refreshHandoverTabMarks();
+    }
+
     async function loadHandover(dateISO) {
+      if (handoverDate !== dateISO) clearHandover(dateISO);
       const seq = ++handoverSeq;
-      if (handoverDate !== dateISO) {       // 日付が変わったら、前の日の分をすぐ消す（別の日の申し送りを見せない）
-        handoverView = null; handoverDate = dateISO;
-        document.getElementById('handover-band').hidden = true;
-        document.querySelectorAll('#residents-container .handover-box-slot').forEach(b => b.remove());
-        refreshHandoverTabMarks();
-      }
       let res;
       try {
         res = await db.rpc('handover_for_home', { p_gh: parseInt(ghNum), p_date: dateISO });
@@ -1270,7 +1278,7 @@
       if (res.error) {
         // 関数がまだ無い環境（表を足す前）では、何も出さない。それ以外の失敗は帯で知らせる
         const missing = res.error.code === 'PGRST202' || res.error.code === '42883';
-        if (!handoverView) renderHandover(missing ? null : '申し送りを読み込めませんでした。画面を読み込み直してください。');
+        if (!handoverView) renderHandover(missing ? null : '申し送りを読み込めませんでした。');
         return;
       }
       handoverFetchedAt = Date.now();
@@ -1282,6 +1290,11 @@
       if (document.hidden || !handoverDate) return;
       if (HandoverView.shouldRefresh(handoverFetchedAt, Date.now())) loadHandover(handoverDate);
     });
+    // 前面のまま開き続けている端末にも、後から届いた分を出す（見えている間だけ・5 分ごと）
+    setInterval(() => {
+      if (document.hidden || !handoverDate) return;
+      if (HandoverView.shouldRefresh(handoverFetchedAt, Date.now())) loadHandover(handoverDate);
+    }, 60 * 1000);
 
     // ─── Diaper Usage ─────────────────────────────────────
     let diaperItemsByResident = {}; // { residentId: [{id, name}] }
@@ -3712,6 +3725,7 @@
     const reportLoadSeq = ReportGuard.createLoadSequence(); // 日付の素早い切替で先の応答を捨てる
     async function loadDateData(dateISO) {
       const loadSeq = reportLoadSeq.begin();
+      clearHandover(dateISO); // 前の日の申し送りを先に消す（このあと読み込みが失敗しても、別の日の分を見せない）
       reportLoadedFor = null;
       reportDirty = false;
       setLoadGuardBanner(null);

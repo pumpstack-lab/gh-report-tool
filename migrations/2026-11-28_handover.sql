@@ -1,6 +1,8 @@
 -- 申し送り（事業所 → グループホームの業務日報）。
 -- 設計: care-stack-absence/docs/superpowers/specs/2026-11-28-handover-design.md §3
 -- 既存の表には触らない。非破壊・冪等。⚠️ 本番適用は Getter 本体が行う。
+-- 途中で落ちたら何も残らないよう、全体を 1 つの取引にする。
+begin;
 
 -- 3-1 事業所×日（行がある＝その日は届いた）
 create table if not exists handover_days (
@@ -41,6 +43,7 @@ create table if not exists handover_fixed (
   created_by    text not null,
   ended_at      timestamptz,
   ended_by      text,
+  changed_by    text,                 -- 最後に 終了／戻す／延ばす をした人（控えに写すため）
   created_at    timestamptz not null default now(),
   check (until_date is null or until_date >= start_date)
 );
@@ -49,14 +52,15 @@ create index if not exists handover_fixed_resident_idx on handover_fixed (reside
 -- 3-4 直す前・消す前の文の控え（追記だけ・画面には出さない）
 create table if not exists handover_history (
   id            bigserial primary key,
-  src           text not null,          -- 'note'／'day'
+  src           text not null,          -- 'note'／'day'／'fixed'
   src_id        bigint not null,
-  target_date   date not null,
-  facility      text not null,
+  target_date   date not null,          -- 固定の控えでは「いつから」の日
+  facility      text not null,          -- 固定の控えでは出どころ
   resident_id   bigint,
   body          text not null,
   reporter      text,
   op            text not null,          -- 'update'／'delete'
+  detail        text,                   -- 固定の変更の中身（変える前の 期限・終了時刻・終了者 と、変えた人）
   changed_at    timestamptz not null default now()
 );
 create index if not exists handover_history_date_idx on handover_history (target_date, facility);
@@ -64,7 +68,13 @@ create index if not exists handover_history_date_idx on handover_history (target
 create or replace function handover_keep_history() returns trigger
 language plpgsql as $$
 begin
-  if tg_table_name = 'handover_notes' then
+  if tg_table_name = 'handover_fixed' then
+    -- 固定は本文を書き換えない。期限・終了・戻す の前の状態と、変えた人を残す
+    insert into handover_history (src, src_id, target_date, facility, resident_id, body, op, detail)
+    values ('fixed', old.id, old.start_date, old.source, old.resident_id, old.body, lower(tg_op),
+            json_build_object('until_date', old.until_date, 'ended_at', old.ended_at, 'ended_by', old.ended_by,
+                              'changed_by', case when tg_op = 'DELETE' then null else new.changed_by end)::text);
+  elsif tg_table_name = 'handover_notes' then
     if tg_op = 'DELETE' or old.body is distinct from new.body then
       insert into handover_history (src, src_id, target_date, facility, resident_id, body, op)
       values ('note', old.id, old.target_date, old.facility, old.resident_id, old.body, lower(tg_op));
@@ -85,15 +95,20 @@ drop trigger if exists handover_days_history on handover_days;
 create trigger handover_days_history before update or delete on handover_days
   for each row execute function handover_keep_history();
 
+drop trigger if exists handover_fixed_history on handover_fixed;
+create trigger handover_fixed_history before update or delete on handover_fixed
+  for each row execute function handover_keep_history();
+
 -- 3-5 権限：RLS 有効・方針 0（ブラウザからは直接読めない・書けない）。読むのは下の関数だけ
 alter table handover_days    enable row level security;
 alter table handover_notes   enable row level security;
 alter table handover_fixed   enable row level security;
 alter table handover_history enable row level security;
+revoke all on handover_days, handover_notes, handover_fixed, handover_history from anon, authenticated;
 
 -- 日報画面が 1 往復で読む。p_gh＝ホーム 1〜6、p_date＝日報の日付
 create or replace function handover_for_home(p_gh integer, p_date date) returns json
-language plpgsql stable security definer set search_path = public as $$
+language plpgsql stable security definer set search_path = public, pg_temp as $$
 declare
   out json;
 begin
@@ -121,8 +136,12 @@ begin
   )
   select json_build_object(
     'facilities', coalesce((
+      -- running＝この 7 日（当日を含む）に 1 回でも送った事業所。まだ始めていない事業所の「まだ」を出さないため
       select json_agg(json_build_object('key', f.facility, 'submitted_at', d.submitted_at, 'updated_at', d.updated_at,
-                                        'reporter', d.reporter, 'notice', d.notice) order by f.facility)
+                                        'reporter', d.reporter, 'notice', d.notice,
+                                        'running', d.id is not null or exists (
+                                          select 1 from handover_days r where r.facility = f.facility
+                                          and r.target_date < p_date and r.target_date >= p_date - 7)) order by f.facility)
       from facs f left join handover_days d on d.facility = f.facility and d.target_date = p_date), '[]'::json),
     'notes', coalesce((
       select json_agg(json_build_object('resident_id', n.resident_id, 'facility', n.facility, 'target_date', n.target_date,
@@ -143,8 +162,11 @@ revoke all on function handover_for_home(integer, date) from public;
 revoke all on function handover_for_home(integer, date) from anon;
 grant execute on function handover_for_home(integer, date) to authenticated;
 
+commit;
+
 -- ─── 適用後の確認（Getter 本体・本番） ───
 --   select tablename, rowsecurity from pg_tables where tablename like 'handover_%';            -- 4 行・全部 true
 --   select count(*) from pg_policies where tablename like 'handover_%';                         -- 0
 --   select has_function_privilege('anon', 'handover_for_home(integer, date)', 'execute');       -- false
 --   select has_function_privilege('authenticated', 'handover_for_home(integer, date)', 'execute'); -- true
+--   select handover_for_home(1, current_date);   -- 落ちずに json が返る（列や型の食い違いはここで出る）

@@ -154,6 +154,15 @@ def main():
                    page.locator(".handover-box").count() == 0 and page.locator(".resident-tab-ho").count() == 0
                    and "届いた" not in page.inner_text("#handover-band"))
             record("申し送りの無い人にも固定の入口だけは出る", entry(page, A).locator("a.handover-link").count() == 1)
+            page.fill("#report-date", DATE); page.dispatch_event("#report-date", "change")
+            page.wait_for_function("document.querySelectorAll('.handover-box').length > 0")
+            page.route("**/rest/v1/reports*", lambda r: r.fulfill(status=500, content_type="application/json", body='{"message":"boom"}') if r.request.method == "GET" else r.fallback())
+            page.fill("#report-date", "2026-09-06"); page.dispatch_event("#report-date", "change")
+            page.wait_for_timeout(1500)
+            record("日報の読み込みが失敗した日にも、前の日の申し送りは残らない",
+                   page.locator(".handover-box").count() == 0 and page.locator(".resident-tab-ho").count() == 0 and "届いた" not in page.inner_text("#handover-band"),
+                   str(page.evaluate("[document.getElementById('report-date').value, handoverDate, reportLoadedFor, document.querySelectorAll('.handover-box').length, document.getElementById('handover-band').hidden, document.querySelectorAll('.resident-tab-ho').length, document.getElementById('handover-band').innerText]")))
+            page.unroute("**/rest/v1/reports*")
             record("画面のエラーが無い", not errors, "; ".join(errors))
             page.close()
 
@@ -175,6 +184,12 @@ def main():
             page, errors = open_page(browser, {"calls": 0, "fail": True})
             page.wait_for_selector("#handover-band:not([hidden])")
             record("読み込み失敗を帯で知らせる", "読み込めませんでした" in page.inner_text("#handover-band"))
+            state6 = page.evaluate("handoverSeq")
+            page.unroute("**/rest/v1/rpc/handover_for_home")
+            page.route("**/rest/v1/rpc/handover_for_home", lambda r: r.fulfill(status=200, content_type="application/json", body=json.dumps(payload(DATE))))
+            page.locator("#handover-band .handover-jump", has_text="もう一度読み込む").click()
+            page.wait_for_function("document.getElementById('handover-band').textContent.includes('届いた')")
+            record("「もう一度読み込む」で出し直せる", page.locator(".handover-box").count() >= 1)
             record("失敗しても日報は開ける", entry(page, A).locator(":scope > textarea").first.is_visible() and not errors)
             browser.close()
     finally:
