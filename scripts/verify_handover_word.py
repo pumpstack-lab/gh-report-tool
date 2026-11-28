@@ -84,7 +84,7 @@ def main():
             new_parts, new_saved, new_name, shot = run(browser, 8802, True)
             none_parts, _, _, _ = run(browser, 8802, False)
             browser.close()
-        record("（準備）今の版では申し送りの箱が画面に出ている", "今日の申し送り" in shot and "固定申し送り" in shot)
+        record("（準備）今の版では申し送りの箱が画面に出ている", "の申し送り" in shot and "固定申し送り" in shot)
         record("Word のファイル名が同じ", old_name == new_name, f"{old_name} / {new_name}")
         record("Word の部品の一覧が同じ", list(old_parts) == list(new_parts), str(list(new_parts)))
         doc_old, doc_new = old_parts["word/document.xml"], new_parts["word/document.xml"]

@@ -30,19 +30,28 @@ def record(name, ok, detail=""):
     print(f"[{'PASS' if ok else 'FAIL'}] {name}" + (f" — {detail}" if detail else ""))
 
 
+PREV = "2026-09-03"   # 日報 9/4 が主に出す日（前の日の日中）
+
+
 def payload(date, late=False):
+    """日報の日付 date に対する関数の返り値。主に出すのは前の日（PREV）の分。"""
     if date != DATE:
-        return {"facilities": [{"key": "komoan", "submitted_at": None, "reporter": None, "notice": None}], "notes": [], "fixed": []}
+        return {"facilities": [{"key": "komoan", "running": True, "days": []}], "notes": [], "fixed": []}
     notes = [
-        {"resident_id": 101, "facility": "komoan", "target_date": DATE, "body": EVIL + "\n爪切りをお願いします。", "updated_at": "2026-09-04T07:12:00+00:00"},
-        {"resident_id": 101, "facility": "komoan", "target_date": "2026-09-03", "body": "前回の文です。", "updated_at": "2026-09-03T07:00:00+00:00"},
+        {"resident_id": 101, "facility": "komoan", "target_date": PREV, "body": EVIL + "\n爪切りをお願いします。", "updated_at": "2026-09-03T07:12:00+00:00"},
     ]
+    respoir_days = []
     if late:
-        notes.append({"resident_id": 102, "facility": "respoir", "target_date": DATE, "body": "後から届いた文", "updated_at": "2026-09-04T08:30:00+00:00"})
+        notes.append({"resident_id": 102, "facility": "respoir", "target_date": PREV, "body": "後から届いた文", "updated_at": "2026-09-03T08:30:00+00:00"})
+        respoir_days = [{"date": PREV, "submitted_at": "2026-09-03T08:30:00+00:00", "updated_at": "2026-09-03T08:30:00+00:00", "reporter": "架空職員", "notice": ""}]
+    else:
+        notes.append({"resident_id": 102, "facility": "respoir", "target_date": "2026-09-01", "body": "前回の文です。", "updated_at": "2026-09-01T07:00:00+00:00"})
     return {
         "facilities": [
-            {"key": "komoan", "submitted_at": "2026-09-04T07:12:00+00:00", "reporter": "架空職員", "notice": "明日は 15 分早く送ります。" + EVIL},
-            {"key": "respoir", "submitted_at": "2026-09-04T08:30:00+00:00" if late else None, "reporter": "架空職員" if late else None, "notice": "" if late else None},
+            {"key": "komoan", "running": True, "days": [
+                {"date": PREV, "submitted_at": "2026-09-03T07:12:00+00:00", "updated_at": "2026-09-03T07:12:00+00:00", "reporter": "架空職員", "notice": "明日は 15 分早く送ります。" + EVIL}]},
+            {"key": "respoir", "running": True, "days": respoir_days},
+            {"key": "hana", "running": False, "days": []},
         ],
         "notes": notes,
         "fixed": [{"id": 1, "resident_id": 102, "body": "朝食後の薬を確認" + EVIL, "source": "gh", "start_date": "2026-09-01",
@@ -90,12 +99,13 @@ def main():
             page.wait_for_selector("#handover-band:not([hidden])")
             record("関数にホームと日付を渡す", state["args"] == {"p_gh": GH, "p_date": DATE}, str(state.get("args")))
             band = page.inner_text("#handover-band")
-            record("帯に 届いた／まだ が出る", "こも庵 16:12 届いた" in band and "レスポアール まだ" in band, band[:80])
-            record("帯に全体連絡と報告者", "こも庵 の全体連絡" in band and "明日は 15 分早く" in band and "報告者：架空職員" in band)
+            record("帯は日報の前の日（9/3 木）の日中の分だと分かる", "9/3（木） の日中の分" in band, band[:60])
+            record("帯に 届いた／まだ が出る・始めていない事業所は出ない", "こも庵 16:12 届いた" in band and "レスポアール まだ" in band and "HANA" not in band, band[:80])
+            record("帯に全体連絡と報告者", "こも庵 の全体連絡（9/3（木））" in band and "明日は 15 分早く" in band and "報告者：架空職員" in band)
             jumps = page.locator("#handover-band .handover-jump").all_inner_texts()
-            record("帯に申し送りのある人の名前（今日・固定）", jumps == [S, A], str(jumps))
+            record("帯に申し送りのある人の名前（申し送り・固定）", jumps == [S, A], str(jumps))
             marks = page.evaluate("() => [...document.querySelectorAll('.resident-tab-btn')].filter(b => b.querySelector('.resident-tab-ho')).map(b => b.dataset.tabKey)")
-            record("タブの印は今日の申し送りがある人だけ", marks == [S], str(marks))
+            record("タブの印は前の日の申し送りがある人だけ", marks == [S], str(marks))
 
             # 先頭（50 音順）の人＝固定だけの人
             box = entry(page, A).locator(".handover-box")
@@ -112,9 +122,9 @@ def main():
             page.locator("#handover-band .handover-jump", has_text=S).click()
             record("帯の名前を押すとその人のタブが開く", entry(page, S).is_visible() and not entry(page, A).is_visible())
             txt = entry(page, S).locator(".handover-box").inner_text()
-            record("今日の申し送り（事業所名・時刻・改行）", "今日の申し送り" in txt and "こも庵・16:12" in txt and "爪切りをお願いします。" in txt, txt[:90])
-            det = entry(page, S).locator("details.handover-prev")
-            record("前回分は畳んで出る", det.count() == 1 and det.evaluate("d => !d.open") and "9/3" in det.locator("summary").inner_text())
+            record("前の日の申し送り（日付・事業所名・時刻・改行）", "9/3（木） の申し送り" in txt and "こも庵・16:12" in txt and "爪切りをお願いします。" in txt, txt[:90])
+            det = entry(page, A).locator("details.handover-prev")
+            record("前の日に送っていない事業所の分は、前回として畳んで出る", det.count() == 1 and det.evaluate("d => !d.open") and "9/1（火）" in det.locator("summary").inner_text())
             record("仕込み文が動かない（文字のまま出る）",
                    page.evaluate("window.__pwned === undefined") and page.locator("#handover-band img, .handover-box img").count() == 0
                    and "<img src=x" in txt)
@@ -149,7 +159,7 @@ def main():
             page.fill("#report-date", NEXT)
             page.dispatch_event("#report-date", "change")
             page.wait_for_function(f"() => reportLoadedFor === '{NEXT}'", timeout=8000)
-            page.wait_for_function("document.getElementById('handover-band').textContent.includes('こも庵 まだ')")
+            page.wait_for_function("document.getElementById('handover-band').textContent.includes('届いていません')")
             record("別の日では前の日の申し送りが残らない",
                    page.locator(".handover-box").count() == 0 and page.locator(".resident-tab-ho").count() == 0
                    and "届いた" not in page.inner_text("#handover-band"))

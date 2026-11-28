@@ -49,13 +49,35 @@
     return String(s == null ? '' : s).trim() !== '';
   }
 
+  /** 'YYYY-MM-DD' を days 日ずらす。 */
+  function shiftDay(iso, days) {
+    const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(iso || ''));
+    if (!m) return '';
+    const d = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3] + days));
+    return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
+  }
+
+  /** 'YYYY-MM-DD' → 'M/D（曜）' */
+  function dayLabel(iso) {
+    const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(iso || ''));
+    if (!m) return '';
+    const d = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3]));
+    return `${+m[2]}/${+m[3]}（${'日月火水木金土'.charAt(d.getUTCDay())}）`;
+  }
+
   /**
    * 関数の返り値を画面用に組み直す。
+   * 日報の日付＝朝の日付（その日報が指すのは、前の日の夕方〜その日の朝）。
+   * だから主に出すのは「前の日（dateISO の 1 日前）の日中」の申し送り。
+   * 日報と同じ日付の分（その日の夕方に届く）も、あれば日付つきで出す。それより前の分は「前回」として畳む。
    * @returns {{
-   *   status: Array<{key:string,name:string,sent:boolean,text:string}>,
-   *   notices: Array<{name:string,body:string,reporter:string}>,
-   *   byResident: Object<string,{fixed:Array,today:Array,prev:Array}>,
-   *   todayIds: string[], fixedIds: string[], any: boolean }}
+   *   mainDate:string, mainLabel:string,
+   *   status: Array<{key:string,name:string,sent:boolean,text:string}>,   // 前の日の分の 届いた／まだ
+   *   quiet: boolean,                                                      // 前の日はどの事業所も送っていない（休みの日など）
+   *   extra: string[],                                                     // 日報と同じ日付の分が届いている事業所
+   *   notices: Array<{name:string,day:string,body:string,reporter:string}>,
+   *   byResident: Object<string,{fixed:Array,main:Array,prev:Array}>,
+   *   markIds: string[], fixedIds: string[], any: boolean }}
    */
   function build(data, dateISO) {
     const src = data || {};
@@ -63,41 +85,46 @@
     const notes = Array.isArray(src.notes) ? src.notes : [];
     const fixed = Array.isArray(src.fixed) ? src.fixed : [];
     const order = k => { const i = FACILITY_ORDER.indexOf(k); return i < 0 ? 99 : i; };
+    const mainDate = shiftDay(dateISO, -1);
+    const dayOf = (f, iso) => (Array.isArray(f.days) ? f.days : []).find(d => String(d.date || '').slice(0, 10) === iso && d.submitted_at);
+    const sorted = facilities.slice().sort((a, b) => order(a.key) - order(b.key));
 
-    // running が false の事業所（この 7 日に 1 回も送っていない＝まだ始めていない）は、帯に出さない。
-    // 毎日「まだ」が並ぶと、本当の入れ忘れが読まれなくなるため。running が無い古い返り値は出す。
-    const status = facilities.filter(f => f.submitted_at || f.running !== false)
-      .sort((a, b) => order(a.key) - order(b.key)).map(f => {
-        const name = sourceName(f.key);
-        const sent = !!f.submitted_at;
-        const at = timeLabel(f.submitted_at), up = timeLabel(f.updated_at);
-        const text = sent ? `${name} ${at} 届いた${up && up !== at ? `（${up} に直し）` : ''}` : `${name} まだ`;
-        return { key: f.key, name, sent, text };
-      });
-    const notices = facilities.filter(f => f.submitted_at && hasText(f.notice))
-      .sort((a, b) => order(a.key) - order(b.key))
-      .map(f => ({ name: sourceName(f.key), body: String(f.notice), reporter: String(f.reporter || '') }));
+    // running が false の事業所（この 8 日に 1 回も送っていない＝まだ始めていない）は、帯に出さない。
+    // 毎日「まだ」が並ぶと、本当の入れ忘れが読まれなくなるため。
+    const running = sorted.filter(f => f.running !== false || dayOf(f, mainDate) || dayOf(f, dateISO));
+    const status = running.map(f => {
+      const name = sourceName(f.key);
+      const d = dayOf(f, mainDate);
+      if (!d) return { key: f.key, name, sent: false, text: `${name} まだ` };
+      const at = timeLabel(d.submitted_at), up = timeLabel(d.updated_at);
+      return { key: f.key, name, sent: true, text: `${name} ${at} 届いた${up && up !== at ? `（${up} に直し）` : ''}` };
+    });
+    // 前の日にどこも送っていない＝休みの日と見て、「まだ」を並べない
+    const quiet = status.length > 0 && status.every(s => !s.sent);
+    const extra = running.filter(f => dayOf(f, dateISO)).map(f => `${sourceName(f.key)} ${timeLabel(dayOf(f, dateISO).submitted_at)} 届いた`);
+    const notices = [];
+    [mainDate, dateISO].forEach(iso => sorted.forEach(f => {
+      const d = dayOf(f, iso);
+      if (d && hasText(d.notice)) notices.push({ name: sourceName(f.key), day: dayLabel(iso), body: String(d.notice), reporter: String(d.reporter || '') });
+    }));
 
     const byResident = {};
-    const slot = id => (byResident[String(id)] = byResident[String(id)] || { fixed: [], today: [], prev: [] });
+    const slot = id => (byResident[String(id)] = byResident[String(id)] || { fixed: [], main: [], prev: [] });
     fixed.forEach(x => {
       if (!hasText(x.body)) return;
       slot(x.resident_id).fixed.push({ id: x.id, body: String(x.body), meta: fixedMeta(x, dateISO), lastDay: x.until_date === dateISO });
     });
-    notes.slice().sort((a, b) => order(a.facility) - order(b.facility)).forEach(n => {
+    notes.slice().sort((a, b) => String(a.target_date).localeCompare(String(b.target_date)) || order(a.facility) - order(b.facility)).forEach(n => {
       if (!hasText(n.body)) return;
       const day = String(n.target_date || '').slice(0, 10);
-      const name = sourceName(n.facility);
-      if (day === dateISO) {
-        slot(n.resident_id).today.push({ name, body: String(n.body), time: timeLabel(n.updated_at) });
-      } else if (day && day < dateISO) {
-        slot(n.resident_id).prev.push({ name, body: String(n.body), day: shortDay(day) });
-      }
+      const item = { name: sourceName(n.facility), day: dayLabel(day), body: String(n.body), time: timeLabel(n.updated_at) };
+      if (day === mainDate || day === dateISO) slot(n.resident_id).main.push(item);
+      else if (day && day < mainDate) slot(n.resident_id).prev.push(item);
     });
     const ids = Object.keys(byResident);
     return {
-      status, notices, byResident,
-      todayIds: ids.filter(id => byResident[id].today.length > 0),
+      mainDate, mainLabel: dayLabel(mainDate), status, quiet, extra, notices, byResident,
+      markIds: ids.filter(id => byResident[id].main.length > 0),
       fixedIds: ids.filter(id => byResident[id].fixed.length > 0),
       any: status.length > 0 || ids.length > 0,
     };
@@ -108,5 +135,5 @@
     return !lastFetchedMs || nowMs - lastFetchedMs >= REFRESH_MS;
   }
 
-  return { FACILITY_NAMES, CAUTION, sourceName, shortDay, timeLabel, fixedMeta, build, shouldRefresh };
+  return { FACILITY_NAMES, CAUTION, sourceName, shortDay, shiftDay, dayLabel, timeLabel, fixedMeta, build, shouldRefresh };
 });

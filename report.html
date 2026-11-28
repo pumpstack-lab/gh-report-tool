@@ -1153,15 +1153,16 @@
         if (f.lastDay) head.appendChild(hoEl('span', 'handover-lastday', '今日まで'));
         item.appendChild(hoEl('div', 'handover-text', f.body));
       });
-      mine.today.forEach(n => {
+      // 日報の日付＝朝の日付なので、主に出すのは前の日の日中の分（日付を必ず添える）
+      mine.main.forEach(n => {
         const item = box.appendChild(hoEl('div', 'handover-item handover-today'));
-        const head = item.appendChild(hoEl('div', 'handover-head', '今日の申し送り'));
+        const head = item.appendChild(hoEl('div', 'handover-head', `${n.day} の申し送り`));
         head.appendChild(hoEl('span', 'handover-sub', n.name + (n.time ? `・${n.time}` : '')));
         item.appendChild(hoEl('div', 'handover-text', n.body));
       });
       mine.prev.forEach(n => {
         const det = box.appendChild(hoEl('details', 'handover-item handover-prev'));
-        det.appendChild(hoEl('summary', null, `前回の申し送り（${n.name}・${n.day}）を開く`));
+        det.appendChild(hoEl('summary', null, `前回（${n.day}・${n.name}）の申し送りを開く`));
         det.appendChild(hoEl('div', 'handover-text', n.body));
       });
       box.appendChild(link);
@@ -1196,11 +1197,11 @@
       return document.querySelector(`#residents-container .resident-entry[data-resident-id="${CSS.escape(String(id))}"]`);
     }
 
-    // タブの印：その日の個別の申し送りがある人だけ（固定は帯で拾う＝毎日付く印は読まれなくなるため）
+    // タブの印：前の日（と当日）の個別の申し送りがある人だけ（固定は帯で拾う＝毎日付く印は読まれなくなるため）
     function refreshHandoverTabMarks() {
       document.querySelectorAll('.resident-tab-btn .resident-tab-ho').forEach(m => m.remove());
       if (!handoverView) return;
-      handoverView.todayIds.forEach(id => {
+      handoverView.markIds.forEach(id => {
         const entry = handoverEntryById(id);
         if (!entry) return;
         const btn = document.querySelector(`.resident-tab-btn[data-tab-key="${CSS.escape(entry.dataset.name)}"]`);
@@ -1224,12 +1225,22 @@
         return;
       }
       if (!handoverView || !handoverView.any) { band.hidden = true; return; }
-      band.appendChild(hoEl('div', 'section-label', '【事業所からの申し送り】'));
+      band.appendChild(hoEl('div', 'section-label', `【事業所からの申し送り】${handoverView.mainLabel} の日中の分`));
       const st = band.appendChild(hoEl('div', 'handover-status'));
-      handoverView.status.forEach(s => st.appendChild(hoEl('span', 'handover-chip' + (s.sent ? ' is-sent' : ''), s.text)));
+      if (handoverView.quiet) {
+        // 前の日にどこも送っていない＝休みの日と見て、「まだ」を並べない
+        st.appendChild(hoEl('span', 'handover-chip', `${handoverView.mainLabel} の申し送りは届いていません`));
+      } else {
+        handoverView.status.forEach(s => st.appendChild(hoEl('span', 'handover-chip' + (s.sent ? ' is-sent' : ''), s.text)));
+      }
+      if (handoverView.extra.length) {
+        const ex = band.appendChild(hoEl('div', 'handover-status'));
+        ex.appendChild(hoEl('span', 'handover-chip', `${HandoverView.dayLabel(handoverDate)} の分：`));
+        handoverView.extra.forEach(t => ex.appendChild(hoEl('span', 'handover-chip is-sent', t)));
+      }
       handoverView.notices.forEach(n => {
         const item = band.appendChild(hoEl('div', 'handover-item'));
-        const head = item.appendChild(hoEl('div', 'handover-head', `${n.name} の全体連絡`));
+        const head = item.appendChild(hoEl('div', 'handover-head', `${n.name} の全体連絡（${n.day}）`));
         if (n.reporter) head.appendChild(hoEl('span', 'handover-sub', `報告者：${n.reporter}`));
         item.appendChild(hoEl('div', 'handover-text', n.body));
       });
@@ -1244,7 +1255,7 @@
           b.addEventListener('click', () => openResidentTabAndFocus(entry.dataset.name, entry.querySelector('.handover-box-slot') || entry));
         });
       };
-      people('今日の申し送りがある人：', handoverView.todayIds);
+      people('申し送りがある人：', handoverView.markIds);
       people('固定申し送りがある人：', handoverView.fixedIds);
       band.hidden = false;
     }

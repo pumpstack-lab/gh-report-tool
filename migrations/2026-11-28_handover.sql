@@ -99,14 +99,29 @@ drop trigger if exists handover_fixed_history on handover_fixed;
 create trigger handover_fixed_history before update or delete on handover_fixed
   for each row execute function handover_keep_history();
 
+-- 3-4b 申し送りを始めた事業所（行がある＝始めている。法人ポータルで切り替える）
+create table if not exists handover_open (
+  facility      text primary key check (facility in ('komorebi','respoir','btype','hana','komoan')),
+  opened_at     timestamptz not null default now(),
+  opened_by     text not null default ''
+);
+
+-- 万一、前の版の表が先に在った時のための足し込み（無ければ何もしない）
+alter table handover_fixed   add column if not exists changed_by text;
+alter table handover_history add column if not exists detail text;
+
 -- 3-5 権限：RLS 有効・方針 0（ブラウザからは直接読めない・書けない）。読むのは下の関数だけ
 alter table handover_days    enable row level security;
 alter table handover_notes   enable row level security;
 alter table handover_fixed   enable row level security;
 alter table handover_history enable row level security;
-revoke all on handover_days, handover_notes, handover_fixed, handover_history from anon, authenticated;
+alter table handover_open    enable row level security;
+revoke all on handover_days, handover_notes, handover_fixed, handover_history, handover_open from anon, authenticated;
 
--- 日報画面が 1 往復で読む。p_gh＝ホーム 1〜6、p_date＝日報の日付
+-- 日報画面が 1 往復で読む。p_gh＝ホーム 1〜6、p_date＝日報の日付。
+-- ⚠️ 日報の日付＝朝の日付（その日報が指すのは、前の日の夕方〜その日の朝）。
+--    だから主に出すのは「前の日（p_date - 1）の日中」の申し送り。日報と同じ日付の分（その日の夕方に届く）も、あれば返す。
+--    前の日に送っていない事業所は、その前の直近 1 回分（7 日以内）を返す（土日・休みをまたぐため。画面では畳んで出す）。
 create or replace function handover_for_home(p_gh integer, p_date date) returns json
 language plpgsql stable security definer set search_path = public, pg_temp as $$
 declare
@@ -120,29 +135,33 @@ begin
     select r.id from residents r where r.active and r.gh_num = p_gh
   ), facs as (
     select distinct m.facility from facility_members m join people p on p.id = m.resident_id where m.active
-  ), today_notes as (
-    select n.* from handover_notes n join people p on p.id = n.resident_id where n.target_date = p_date
-  ), last_day as (
-    -- 事業所ごとの直近 1 回分（7 日以内・当日より前）。その事業所が送った日で数える
+  ), near_days as (            -- 前の日と当日に送った分
+    select d.* from handover_days d join facs f on f.facility = d.facility
+    where d.target_date in (p_date - 1, p_date)
+  ), last_day as (             -- 前の日に送っていない事業所の、その前の直近 1 回分
     select d.facility, max(d.target_date) as target_date
     from handover_days d join facs f on f.facility = d.facility
-    where d.target_date < p_date and d.target_date >= p_date - 7
+    where d.target_date < p_date - 1 and d.target_date >= p_date - 8
+      and not exists (select 1 from handover_days x where x.facility = d.facility and x.target_date = p_date - 1)
     group by d.facility
-  ), prev_notes as (
+  ), all_notes as (
+    select n.* from handover_notes n join people p on p.id = n.resident_id
+    where n.target_date in (p_date - 1, p_date)
+    union all
     select n.* from handover_notes n join people p on p.id = n.resident_id
     join last_day l on l.facility = n.facility and l.target_date = n.target_date
-  ), all_notes as (
-    select * from today_notes union all select * from prev_notes
   )
   select json_build_object(
     'facilities', coalesce((
-      -- running＝この 7 日（当日を含む）に 1 回でも送った事業所。まだ始めていない事業所の「まだ」を出さないため
-      select json_agg(json_build_object('key', f.facility, 'submitted_at', d.submitted_at, 'updated_at', d.updated_at,
-                                        'reporter', d.reporter, 'notice', d.notice,
-                                        'running', d.id is not null or exists (
-                                          select 1 from handover_days r where r.facility = f.facility
-                                          and r.target_date < p_date and r.target_date >= p_date - 7)) order by f.facility)
-      from facs f left join handover_days d on d.facility = f.facility and d.target_date = p_date), '[]'::json),
+      -- running＝この 8 日（当日を含む）に 1 回でも送った事業所。まだ始めていない事業所の「まだ」を出さないため
+      select json_agg(json_build_object(
+        'key', f.facility,
+        'running', exists (select 1 from handover_days r where r.facility = f.facility
+                           and r.target_date <= p_date and r.target_date >= p_date - 8),
+        'days', coalesce((select json_agg(json_build_object('date', d.target_date, 'submitted_at', d.submitted_at,
+                                   'updated_at', d.updated_at, 'reporter', d.reporter, 'notice', d.notice) order by d.target_date)
+                          from near_days d where d.facility = f.facility), '[]'::json)) order by f.facility)
+      from facs f), '[]'::json),
     'notes', coalesce((
       select json_agg(json_build_object('resident_id', n.resident_id, 'facility', n.facility, 'target_date', n.target_date,
                                         'body', n.body, 'updated_at', n.updated_at) order by n.target_date desc, n.facility)
@@ -165,7 +184,7 @@ grant execute on function handover_for_home(integer, date) to authenticated;
 commit;
 
 -- ─── 適用後の確認（Getter 本体・本番） ───
---   select tablename, rowsecurity from pg_tables where tablename like 'handover_%';            -- 4 行・全部 true
+--   select tablename, rowsecurity from pg_tables where tablename like 'handover_%';            -- 5 行・全部 true
 --   select count(*) from pg_policies where tablename like 'handover_%';                         -- 0
 --   select has_function_privilege('anon', 'handover_for_home(integer, date)', 'execute');       -- false
 --   select has_function_privilege('authenticated', 'handover_for_home(integer, date)', 'execute'); -- true
