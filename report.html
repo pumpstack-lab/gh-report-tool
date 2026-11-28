@@ -1138,6 +1138,7 @@
       const mine = handoverView && handoverView.byResident[String(rid)];
       const link = hoEl('a', 'handover-link', '＋ 固定申し送りを足す・終える');
       link.href = `${HANDOVER_FIXED_URL}?gh=${encodeURIComponent(ghNum)}&rid=${encodeURIComponent(rid)}`;
+      link.target = '_blank'; link.rel = 'noopener';   // 別の画面で開く（書きかけの日報から離れさせない）
       if (!mine) {
         const line = hoEl('div', 'handover-box-slot handover-linkline');
         line.appendChild(link);
