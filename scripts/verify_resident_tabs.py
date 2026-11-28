@@ -558,6 +558,24 @@ def case8_widths_no_overflow_no_errors(pw):
         no_overflow = sw <= vw + 1
         record(f"幅{width}（{name}）: 横にはみ出さない", no_overflow, f"vw={vw} sw={sw}")
         record(f"幅{width}（{name}）: 画面のエラー0", errors == [], str(errors))
+        # スマホではタブを小さく（入力の邪魔にならないように・2026-11-28）。ほかの幅は今までの大きさ
+        h = page.evaluate("Math.round(document.querySelector('.resident-tab-btn').getBoundingClientRect().height)")
+        fs = page.evaluate("parseFloat(getComputedStyle(document.querySelector('.resident-tab-btn')).fontSize)")
+        if width == 390:
+            ok_small = h <= 36 and fs >= 13
+            record(f"幅{width}（{name}）: タブが小さい（高さ 36 以下・文字 13 以上）", ok_small, f"高さ={h} 文字={fs}")
+            # 8 人居る時の場所の取り方（名前は架空）：タブの帯が 3 段までに収まる
+            bar_h = page.evaluate("""() => { const bar = document.getElementById('resident-tabs-bar'); const keep = bar.innerHTML;
+              const b0 = bar.querySelector('.resident-tab-btn'); bar.innerHTML = '';
+              ['検証　一郎','検証　二郎','見本　花子','見本　三郎','試験　太郎','試験　良子','架空　四郎','架空　五月'].forEach(n => { const c = b0.cloneNode(false); c.textContent = n; bar.appendChild(c); });
+              const h = Math.round(bar.getBoundingClientRect().height); bar.innerHTML = keep; return h; }""")
+            ok_bar = bar_h <= 120
+            record(f"幅{width}（{name}）: 8 人のタブの帯が 120 以下の高さに収まる", ok_bar, f"高さ={bar_h}")
+            all_ok = all_ok and ok_small and ok_bar
+        else:
+            ok_big = h >= 44
+            record(f"幅{width}（{name}）: タブは今までの大きさ（高さ 44 以上）", ok_big, f"高さ={h}")
+            all_ok = all_ok and ok_big
         out = ROOT / "scripts" / f"_resident_tabs_{name}_{width}.png"
         page.screenshot(path=str(out), full_page=True)
         print(f"  saved: {out}")

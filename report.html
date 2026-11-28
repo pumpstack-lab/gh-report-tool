@@ -163,6 +163,12 @@
       background: #fff; color: #7a8a9a; cursor: pointer;
     }
     .resident-tabs-toggle.is-active { border-color: #dd6a12; color: #c2570c; }
+    /* スマホではタブを小さく（入力の時に場所を取りすぎるため・2026-11-28 オーナー依頼）。8 人で 5 段→3 段 */
+    @media (max-width: 600px) {
+      .resident-tabs-bar { gap: 5px; margin-bottom: 12px; }
+      .resident-tab-btn { min-height: 34px; padding: 4px 9px; font-size: 14px; border-radius: 8px; }
+      .resident-tabs-toggle { min-height: 34px; padding: 4px 10px; font-size: 13px; margin-bottom: 8px; border-radius: 8px; }
+    }
     /* タブ表示中、選ばれていない人の欄を隠す（DOMからは消さない＝保存処理を壊さないため） */
     #residents-container.tabs-mode .resident-entry[hidden],
     #residents-container.tabs-mode .short-stay-entry[hidden] { display: none; }
